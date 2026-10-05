@@ -3,6 +3,8 @@ package rapide
 import (
 	"log"
 	"net"
+
+	"github.com/maklean/rapide/internal/sequence"
 )
 
 type Listener struct {
@@ -11,6 +13,9 @@ type Listener struct {
 
 	// addr => connection instances that are connected to this Listener
 	peers map[string]*connection
+
+	// sequence number information for the listener
+	sequenceInfo *sequence.SequenceInfo
 }
 
 // Listen creates a socket that starts listening at the given address.

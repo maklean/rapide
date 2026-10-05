@@ -1,6 +1,10 @@
 package rapide
 
-import "net"
+import (
+	"net"
+
+	"github.com/maklean/rapide/internal/sequence"
+)
 
 type connection struct {
 	// socket for this machine
@@ -8,11 +12,21 @@ type connection struct {
 
 	// address this connection is talking to
 	peerAddr *net.UDPAddr
+
+	// sequence number information for the listener
+	sequenceInfo *sequence.SequenceInfo
 }
 
 // Send writes data to the peer address of this connection.
-func (c *connection) Send(data []byte) error {
-	_, err := c.socket.Write(data)
+func (c *connection) Send(payload []byte) error {
+	packet := Packet{RawSequenceNumber: c.sequenceInfo.AdvanceNextOut().Value, Payload: payload}
+
+	data, err := packet.ToBytes()
+	if err != nil {
+		return err
+	}
+
+	_, err = c.socket.Write(data)
 	return err
 }
 
