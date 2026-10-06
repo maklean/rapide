@@ -14,6 +14,7 @@ func main() {
 
 	message := "Hello, World!"
 	err = conn.Send([]byte(message))
+
 	if err != nil {
 		log.Fatal("Failed to send message to listener:", err)
 	}

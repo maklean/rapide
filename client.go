@@ -1,6 +1,10 @@
 package rapide
 
-import "net"
+import (
+	"net"
+
+	"github.com/maklean/rapide/internal/sequence"
+)
 
 // Dial creates a connection to the given address.
 func Dial(address string) (*connection, error) {
@@ -14,7 +18,7 @@ func Dial(address string) (*connection, error) {
 		return nil, err
 	}
 
-	conn := &connection{socket: socket, peerAddr: addr}
+	conn := &connection{socket: socket, peerAddr: addr, sequenceInfo: sequence.NewSequenceInfo()}
 
 	go conn.readLoop()
 

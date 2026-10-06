@@ -8,6 +8,11 @@ type SequenceInfo struct {
 	NextOut SequenceNumber
 }
 
+// NewSequenceInfo creates a new SequenceInfo struct object
+func NewSequenceInfo() SequenceInfo {
+	return SequenceInfo{NextIn: SnFromValue(0), NextOut: SnFromValue(0)}
+}
+
 // Accept returns whether we accepted the given next incoming sequence number
 func (s *SequenceInfo) Accept(sn SequenceNumber) bool {
 	if s.NextIn.Gt(sn) {
@@ -18,8 +23,8 @@ func (s *SequenceInfo) Accept(sn SequenceNumber) bool {
 	return true
 }
 
-// AdvanceNextOut returns the current next outgoing sequence number, then moves to the next outgoing sequence number.
-func (s *SequenceInfo) AdvanceNextOut() (sn SequenceNumber) {
+// AdvanceOut returns the current next outgoing sequence number, then moves to the next outgoing sequence number.
+func (s *SequenceInfo) AdvanceOut() (sn SequenceNumber) {
 	sn = s.NextOut
 	s.NextOut = s.NextOut.Next()
 	return

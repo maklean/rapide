@@ -15,7 +15,7 @@ type Listener struct {
 	peers map[string]*connection
 
 	// sequence number information for the listener
-	sequenceInfo *sequence.SequenceInfo
+	sequenceInfo sequence.SequenceInfo
 }
 
 // Listen creates a socket that starts listening at the given address.
@@ -30,7 +30,7 @@ func Listen(address string) (*Listener, error) {
 		return nil, err
 	}
 
-	listener := &Listener{socket: socket, peers: make(map[string]*connection)}
+	listener := &Listener{socket: socket, peers: make(map[string]*connection), sequenceInfo: sequence.NewSequenceInfo()}
 
 	go listener.readLoop()
 
@@ -53,7 +53,7 @@ func (l *Listener) readLoop() {
 		// create new connection entry in peers map if it doesn't exist yet
 		if !exists {
 			log.Printf("Listener: accepted new connection '%s'...", key)
-			conn = &connection{socket: l.socket, peerAddr: addr}
+			conn = &connection{socket: l.socket, peerAddr: addr, sequenceInfo: sequence.NewSequenceInfo()}
 			l.peers[key] = conn
 		}
 
@@ -67,5 +67,7 @@ func (l *Listener) readLoop() {
 		if !l.sequenceInfo.Accept(data.GetSn()) {
 			continue
 		}
+
+		log.Printf("'%s' says: %s", key, string(data.Payload))
 	}
 }

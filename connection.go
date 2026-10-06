@@ -14,12 +14,12 @@ type connection struct {
 	peerAddr *net.UDPAddr
 
 	// sequence number information for the listener
-	sequenceInfo *sequence.SequenceInfo
+	sequenceInfo sequence.SequenceInfo
 }
 
 // Send writes data to the peer address of this connection.
 func (c *connection) Send(payload []byte) error {
-	packet := Packet{RawSequenceNumber: c.sequenceInfo.AdvanceNextOut().Value, Payload: payload}
+	packet := Packet{RawSequenceNumber: c.sequenceInfo.AdvanceOut().Value, PayloadLength: uint16(len(payload)), Payload: payload}
 
 	data, err := packet.ToBytes()
 	if err != nil {
