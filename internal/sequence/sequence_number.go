@@ -11,8 +11,8 @@ func SnFromValue(value uint16) (sn SequenceNumber) {
 }
 
 // Next returns the next sequence number from the current one.
-func (sn SequenceNumber) Next() (sn_n SequenceNumber) {
-	sn_n.Value = sn.Value + 1
+func (sn SequenceNumber) Next() (snN SequenceNumber) {
+	snN.Value = sn.Value + 1
 	return
 }
 
