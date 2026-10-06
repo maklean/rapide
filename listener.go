@@ -57,8 +57,15 @@ func (l *Listener) readLoop() {
 			l.peers[key] = conn
 		}
 
-		data := buf[:n]
-		strData := string(data)
-		log.Printf("Received '%s' from '%s'", strData, key)
+		data, err := FromBytes(buf[:n])
+		if err != nil {
+			log.Printf("Failed to decode packet for '%s': %v", key, err)
+			continue
+		}
+
+		// reject b/c inc. sequence number is higher
+		if !l.sequenceInfo.Accept(data.GetSn()) {
+			continue
+		}
 	}
 }
