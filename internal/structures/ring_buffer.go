@@ -14,11 +14,6 @@ type RingBuffer[T any] struct {
 	buffer []T
 }
 
-// Returns the physical index of 'i' in the RingBuffer.
-func (r *RingBuffer[T]) bufIdx(i int) int {
-	return (r.start + i) % len(r.buffer)
-}
-
 // NewRingBuffer creates a new RingBuffer with an initial size of 0.
 func NewRingBuffer[T any]() *RingBuffer[T] {
 	return &RingBuffer[T]{start: 0, size: 0, buffer: nil}
@@ -153,4 +148,9 @@ func (r *RingBuffer[T]) resize() {
 
 	r.buffer = newBuffer
 	r.start = 0
+}
+
+// Returns the physical index of 'i' in the RingBuffer.
+func (r *RingBuffer[T]) bufIdx(i int) int {
+	return (r.start + i) % len(r.buffer)
 }
