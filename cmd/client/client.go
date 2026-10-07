@@ -14,7 +14,7 @@ func main() {
 	}
 
 	for i := range 10 {
-		err = conn.Send([]byte(fmt.Sprintf("Message %d", i+1)))
+		err = conn.Send([]byte(fmt.Sprintf("Message %d", i+1)), true)
 
 		if err != nil {
 			log.Fatal("Failed to send message to listener:", err)

@@ -3,6 +3,7 @@ package rapide
 import (
 	"bytes"
 	"encoding/binary"
+	"time"
 
 	"github.com/maklean/rapide/internal/sequence"
 )
@@ -16,6 +17,26 @@ type Packet struct {
 
 	// the data sent in this packet
 	Payload []byte
+
+	// whether this is a reliable (i.e., should send ACK) packet or not
+	IsReliable bool
+
+	// whether this is an acknowledgement packet or not
+	IsAck bool
+
+	// the sequence number being acknowledged (only relevant if IsAck == true)
+	AckSequenceNumber uint16
+}
+
+type unackedPacket struct {
+	// Packet struct object (in bytes)
+	packet []byte
+
+	// the last time we tried sending this packet
+	sentAt time.Time
+
+	// number of times we've tried sending this packet
+	retries uint8
 }
 
 // Decodes a Packet struct from a sequence of bytes.
@@ -23,6 +44,7 @@ func FromBytes(data []byte) (*Packet, error) {
 	p := &Packet{}
 	reader := bytes.NewReader(data)
 
+	// TODO: clean this up, this can be done inline in the if.
 	err := binary.Read(reader, binary.BigEndian, &p.RawSequenceNumber)
 	if err != nil {
 		return nil, err
@@ -36,6 +58,21 @@ func FromBytes(data []byte) (*Packet, error) {
 	p.Payload = make([]byte, p.PayloadLength)
 
 	err = binary.Read(reader, binary.BigEndian, p.Payload)
+	if err != nil {
+		return nil, err
+	}
+
+	err = binary.Read(reader, binary.BigEndian, &p.IsReliable)
+	if err != nil {
+		return nil, err
+	}
+
+	err = binary.Read(reader, binary.BigEndian, &p.IsAck)
+	if err != nil {
+		return nil, err
+	}
+
+	err = binary.Read(reader, binary.BigEndian, &p.AckSequenceNumber)
 	if err != nil {
 		return nil, err
 	}
@@ -56,6 +93,18 @@ func (p *Packet) ToBytes() ([]byte, error) {
 	}
 
 	if _, err := buf.Write(p.Payload); err != nil {
+		return nil, err
+	}
+
+	if err := binary.Write(buf, binary.BigEndian, p.IsReliable); err != nil {
+		return nil, err
+	}
+
+	if err := binary.Write(buf, binary.BigEndian, p.IsAck); err != nil {
+		return nil, err
+	}
+
+	if err := binary.Write(buf, binary.BigEndian, p.AckSequenceNumber); err != nil {
 		return nil, err
 	}
 
