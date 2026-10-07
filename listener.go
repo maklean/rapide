@@ -63,8 +63,8 @@ func (l *Listener) readLoop() {
 			continue
 		}
 
-		// reject b/c inc. sequence number is higher
-		if !l.sequenceInfo.Accept(data.GetSn()) {
+		// reject if the incoming sequence number for this connection is greater than the packet's number
+		if !conn.sequenceInfo.Accept(data.GetSn()) {
 			continue
 		}
 
