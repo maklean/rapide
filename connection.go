@@ -2,8 +2,10 @@ package rapide
 
 import (
 	"net"
+	"sync"
 
 	"github.com/maklean/rapide/internal/sequence"
+	"github.com/maklean/rapide/internal/structures"
 )
 
 type connection struct {
@@ -16,7 +18,11 @@ type connection struct {
 	// sequence number information for the listener
 	sequenceInfo sequence.SequenceInfo
 
-	// TODO: add ack queue (with mutex) which is a RingBuffer<unackedPacket>
+	// queue of packets waiting to be acknowledged
+	ackQueue structures.RingBuffer[unackedPacket]
+
+	// mutex for the ackQueue
+	ackQueueMu sync.Mutex
 }
 
 // Send writes data to the peer address of this connection.
@@ -46,9 +52,17 @@ func (c *connection) readLoop() {
 	for {
 		n, err := c.socket.Read(buf)
 		if err != nil {
-			return
+			continue
 		}
 
-		_ = buf[:n]
+		packet, err := FromBytes(buf[:n])
+		if err != nil {
+			continue
+		}
+
+		// TODO: add to ack queue if reliable.
+		if packet.IsReliable {
+
+		}
 	}
 }
