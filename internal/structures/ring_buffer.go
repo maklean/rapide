@@ -2,7 +2,7 @@ package structures
 
 import "errors"
 
-// An RingBuffer/ArrayDeque from OpenDataStructures (textbook my DSA class is currently following)
+// An RingBuffer/ArrayDeque from OpenDataStructures
 type RingBuffer[T any] struct {
 	// start of the ring buffer
 	start int
@@ -14,12 +14,12 @@ type RingBuffer[T any] struct {
 	buffer []T
 }
 
-// Returns the physical index in the RingBuffer.
+// Returns the physical index of 'i' in the RingBuffer.
 func (r *RingBuffer[T]) bufIdx(i int) int {
 	return (r.start + i) % len(r.buffer)
 }
 
-// NewRingBuffer creates a new RingBuffer.
+// NewRingBuffer creates a new RingBuffer with an initial size of 0.
 func NewRingBuffer[T any]() *RingBuffer[T] {
 	return &RingBuffer[T]{start: 0, size: 0, buffer: nil}
 }
@@ -52,7 +52,7 @@ func (r *RingBuffer[T]) PopLast() (*T, error) {
 	return r.Remove(r.size - 1)
 }
 
-// Get returns the element at index 'i', or an error if the element doesn't exist
+// Get returns the element at index 'i' in the RingBuffer.
 func (r *RingBuffer[T]) Get(i int) (*T, error) {
 	if i < 0 || i >= r.size {
 		return nil, errors.New("out of bounds access on RingBuffer")
