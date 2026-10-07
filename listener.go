@@ -13,9 +13,6 @@ type Listener struct {
 
 	// addr => connection instances that are connected to this Listener
 	peers map[string]*connection
-
-	// sequence number information for the listener
-	sequenceInfo sequence.SequenceInfo
 }
 
 // Listen creates a socket that starts listening at the given address.
@@ -30,7 +27,7 @@ func Listen(address string) (*Listener, error) {
 		return nil, err
 	}
 
-	listener := &Listener{socket: socket, peers: make(map[string]*connection), sequenceInfo: sequence.NewSequenceInfo()}
+	listener := &Listener{socket: socket, peers: make(map[string]*connection)}
 
 	go listener.readLoop()
 
@@ -39,7 +36,7 @@ func Listen(address string) (*Listener, error) {
 
 // readLoop starts the read loop for the current Listener
 func (l *Listener) readLoop() {
-	buf := make([]byte, 1500)
+	buf := make([]byte, 1500) // TODO: maybe use some guaranteed MTU value for this.
 
 	for {
 		n, addr, err := l.socket.ReadFromUDP(buf)
