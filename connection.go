@@ -1,7 +1,6 @@
 package rapide
 
 import (
-	"log"
 	"net"
 	"sync"
 
@@ -82,6 +81,4 @@ func (c *connection) handlePacket(p *Packet) {
 		return
 	}
 
-	log.Printf("Received payload: '%s' (%d bytes)", string(p.Payload), p.PayloadLength)
-	log.Printf("New incoming sequence number = %d", c.sequenceInfo.NextIn.Value)
 }

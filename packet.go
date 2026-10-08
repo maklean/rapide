@@ -9,6 +9,9 @@ import (
 )
 
 type Packet struct {
+	// the peer connection ID for this packet (0 = unknown)
+	ConnectionID uint32
+
 	// raw sequence number for this packet
 	RawSequenceNumber uint16
 
@@ -18,14 +21,17 @@ type Packet struct {
 	// the data sent in this packet
 	Payload []byte
 
+	// the sequence number being acknowledged (only relevant if IsAck == true)
+	AckSequenceNumber uint16
+
 	// whether this is a reliable (i.e., should send ACK) packet or not
 	IsReliable bool
 
 	// whether this is an acknowledgement packet or not
 	IsAck bool
 
-	// the sequence number being acknowledged (only relevant if IsAck == true)
-	AckSequenceNumber uint16
+	// whether this is a handshake packet or not
+	IsConnect bool
 }
 
 type unackedPacket struct {
@@ -45,7 +51,12 @@ func FromBytes(data []byte) (*Packet, error) {
 	reader := bytes.NewReader(data)
 
 	// TODO: clean this up, this can be done inline in the if.
-	err := binary.Read(reader, binary.BigEndian, &p.RawSequenceNumber)
+	err := binary.Read(reader, binary.BigEndian, &p.ConnectionID)
+	if err != nil {
+		return nil, err
+	}
+
+	err = binary.Read(reader, binary.BigEndian, &p.RawSequenceNumber)
 	if err != nil {
 		return nil, err
 	}
@@ -77,12 +88,21 @@ func FromBytes(data []byte) (*Packet, error) {
 		return nil, err
 	}
 
+	err = binary.Read(reader, binary.BigEndian, &p.IsConnect)
+	if err != nil {
+		return nil, err
+	}
+
 	return p, nil
 }
 
 // Encodes a Packet struct to a sequence of bytes.
 func (p *Packet) ToBytes() ([]byte, error) {
 	buf := new(bytes.Buffer)
+
+	if err := binary.Write(buf, binary.BigEndian, p.ConnectionID); err != nil {
+		return nil, err
+	}
 
 	if err := binary.Write(buf, binary.BigEndian, p.RawSequenceNumber); err != nil {
 		return nil, err
@@ -105,6 +125,10 @@ func (p *Packet) ToBytes() ([]byte, error) {
 	}
 
 	if err := binary.Write(buf, binary.BigEndian, p.AckSequenceNumber); err != nil {
+		return nil, err
+	}
+
+	if err := binary.Write(buf, binary.BigEndian, p.IsConnect); err != nil {
 		return nil, err
 	}
 

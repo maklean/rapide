@@ -2,6 +2,7 @@ package rapide
 
 import (
 	"log"
+	"math/rand/v2"
 	"net"
 	"sync"
 
@@ -17,7 +18,7 @@ type Listener struct {
 	peersMu sync.Mutex
 
 	// addr => connection instances that are connected to this Listener
-	peers map[string]*connection
+	peers map[uint32]*connection
 }
 
 // newListener creates a new Listener struct instance.
@@ -32,7 +33,7 @@ func newListener(address string) (*Listener, error) {
 		return nil, err
 	}
 
-	return &Listener{socket: socket, peers: make(map[string]*connection)}, nil
+	return &Listener{socket: socket, peers: make(map[uint32]*connection)}, nil
 }
 
 // Listen creates a socket that starts listening at the given address.
@@ -67,17 +68,43 @@ func (l *Listener) listenerReadLoop() {
 		// TODO: implement ConnectionID system later, currently this is vulnerable to NAT mapping changes
 		l.peersMu.Lock()
 
-		key := addr.String()
+		if packet.ConnectionID == 0 {
+			if !packet.IsConnect {
+				log.Println("[ignore] received connection ID of 0 on a non-handshake packet")
+				continue
+			}
+
+			// create new peer entry on handshake
+			conn := newConnection(l.socket, writer.CreateListenerWriter(l.socket, addr))
+			packet.ConnectionID = l.generateConnectionID()
+			l.peers[uint32(packet.ConnectionID)] = conn
+		}
+
+		// TODO: I fucked up somewhere, not sure if the connection ID should be accessible from here.
 		conn, exists := l.peers[key]
 
 		// add to peers map if it's a new peer
 		if !exists {
-			conn = newConnection(l.socket, writer.CreateListenerWriter(l.socket, addr))
-			l.peers[key] = conn
+
 		}
 
 		conn.deliver(packet)
 
 		l.peersMu.Unlock()
 	}
+}
+
+// generateConnectionID returns a new (unused) connectionID for a new peer connection
+func (l *Listener) generateConnectionID() uint32 {
+	connectionID := uint32(rand.IntN(4294967295))
+
+	_, exists := l.peers[connectionID]
+
+	for !exists {
+		// generate new connectionID until we proc something that isn't used
+		connectionID = uint32(rand.IntN(4294967295))
+		_, exists = l.peers[connectionID]
+	}
+
+	return connectionID
 }
