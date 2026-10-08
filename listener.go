@@ -2,6 +2,7 @@ package rapide
 
 import (
 	"log"
+	"math"
 	"math/rand/v2"
 	"net"
 	"sync"
@@ -80,7 +81,6 @@ func (l *Listener) listenerReadLoop() {
 			l.peers[uint32(packet.ConnectionID)] = conn
 		}
 
-		// TODO: I fucked up somewhere, not sure if the connection ID should be accessible from here.
 		conn, exists := l.peers[key]
 
 		// add to peers map if it's a new peer
@@ -96,13 +96,13 @@ func (l *Listener) listenerReadLoop() {
 
 // generateConnectionID returns a new (unused) connectionID for a new peer connection
 func (l *Listener) generateConnectionID() uint32 {
-	connectionID := uint32(rand.IntN(4294967295))
+	connectionID := uint32(rand.IntN(math.MaxUint32))
 
 	_, exists := l.peers[connectionID]
 
 	for !exists {
 		// generate new connectionID until we proc something that isn't used
-		connectionID = uint32(rand.IntN(4294967295))
+		connectionID = uint32(rand.IntN(math.MaxUint32))
 		_, exists = l.peers[connectionID]
 	}
 
