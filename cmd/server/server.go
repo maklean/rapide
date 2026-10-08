@@ -1,7 +1,6 @@
 package main
 
 import (
-	"fmt"
 	"log"
 
 	"github.com/maklean/rapide"
@@ -10,10 +9,10 @@ import (
 func main() {
 	_, err := rapide.Listen("localhost:3000")
 	if err != nil {
-		log.Fatalln("Failed to listen at localhost:3000 :", err)
+		log.Fatalf("Failed to start listening on 'localhost:3000': %v", err)
 	}
 
-	fmt.Println("Running listener on localhost:3000...")
+	log.Println("Server started on localhost:3000...")
 
 	select {}
 }

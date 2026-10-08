@@ -1,7 +1,6 @@
 package main
 
 import (
-	"fmt"
 	"log"
 
 	"github.com/maklean/rapide"
@@ -10,14 +9,13 @@ import (
 func main() {
 	conn, err := rapide.Dial("localhost:3000")
 	if err != nil {
-		log.Fatal("Failed to dial localhost:3000 :", err)
+		log.Fatalf("Failed to connect to 'localhost:3000': %v", err)
 	}
 
-	for i := range 10 {
-		err = conn.Send([]byte(fmt.Sprintf("Message %d", i+1)), true)
-
-		if err != nil {
-			log.Fatal("Failed to send message to listener:", err)
-		}
+	err = conn.Send([]byte("Hello, from the client!"))
+	if err != nil {
+		log.Fatalf("Failed to send message to server: %v", err)
 	}
+
+	log.Println("Sent message to server.")
 }

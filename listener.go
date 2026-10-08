@@ -3,20 +3,24 @@ package rapide
 import (
 	"log"
 	"net"
+	"sync"
 
-	"github.com/maklean/rapide/internal/sequence"
+	"github.com/maklean/rapide/internal/writer"
 )
 
 type Listener struct {
 	// socket for the listener
 	socket *net.UDPConn
 
+	// mutex for the peers map
+	peersMu sync.Mutex
+
 	// addr => connection instances that are connected to this Listener
 	peers map[string]*connection
 }
 
-// Listen creates a socket that starts listening at the given address.
-func Listen(address string) (*Listener, error) {
+// newListener creates a new Listener struct instance.
+func newListener(address string) (*Listener, error) {
 	addr, err := net.ResolveUDPAddr("udp", address)
 	if err != nil {
 		return nil, err
@@ -27,44 +31,51 @@ func Listen(address string) (*Listener, error) {
 		return nil, err
 	}
 
-	listener := &Listener{socket: socket, peers: make(map[string]*connection)}
+	return &Listener{socket: socket, peers: make(map[string]*connection)}, nil
+}
+
+// Listen creates a socket that starts listening at the given address.
+func Listen(address string) (*Listener, error) {
+	listener, err := newListener(address)
+	if err != nil {
+		return nil, err
+	}
 
 	go listener.readLoop()
 
 	return listener, nil
 }
 
-// readLoop starts the read loop for the current Listener
+// readLoop is the Listener's read loop - it accepts datagrams, maps them to an existing connection (or creates one), and sends a packet into the connection's incoming packet channel.
 func (l *Listener) readLoop() {
-	buf := make([]byte, 1500) // TODO: maybe use some guaranteed MTU value for this.
+	buf := make([]byte, 1500) // TODO: use some MTU-safe buffer size for this, and don't use a magic number.
 
 	for {
 		n, addr, err := l.socket.ReadFromUDP(buf)
 		if err != nil {
-			return
+			log.Fatalln("Failed to read data from incoming datagram:", err)
 		}
+
+		packet, err := FromBytes(buf[:n])
+		if err != nil {
+			log.Println("Failed to decode payload from incoming datagram:", err)
+			continue
+		}
+
+		// TODO: implement ConnectionID system later, currently this is vulnerable to NAT mapping changes
+		l.peersMu.Lock()
 
 		key := addr.String()
 		conn, exists := l.peers[key]
 
-		// create new connection entry in peers map if it doesn't exist yet
+		// add to peers map if it's a new peer
 		if !exists {
-			log.Printf("Listener: accepted new connection '%s'...", key)
-			conn = &connection{socket: l.socket, peerAddr: addr, sequenceInfo: sequence.NewSequenceInfo()}
+			conn = newConnection(&writer.ListenerWriter{Socket: l.socket, PeerAddr: addr})
 			l.peers[key] = conn
 		}
 
-		data, err := FromBytes(buf[:n])
-		if err != nil {
-			log.Printf("Failed to decode packet for '%s': %v", key, err)
-			continue
-		}
+		conn.deliver(packet)
 
-		// reject if the incoming sequence number for this connection is greater than the packet's number
-		if !conn.sequenceInfo.Accept(data.GetSn()) {
-			continue
-		}
-
-		log.Printf("'%s' says: %s", key, string(data.Payload))
+		l.peersMu.Unlock()
 	}
 }

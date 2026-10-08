@@ -3,11 +3,11 @@ package rapide
 import (
 	"net"
 
-	"github.com/maklean/rapide/internal/sequence"
+	"github.com/maklean/rapide/internal/writer"
 )
 
-// Dial creates a connection to the given address.
-func Dial(address string) (*connection, error) {
+// newClient creates a new client that connects to the given address
+func newClient(address string) (*connection, error) {
 	addr, err := net.ResolveUDPAddr("udp", address)
 	if err != nil {
 		return nil, err
@@ -18,9 +18,22 @@ func Dial(address string) (*connection, error) {
 		return nil, err
 	}
 
-	conn := &connection{socket: socket, peerAddr: addr, sequenceInfo: sequence.NewSequenceInfo()}
+	conn := newConnection(&writer.ClientWriter{Socket: socket, PeerAddr: addr})
+	return conn, nil
+}
 
-	go conn.readLoop()
+// Dial connects to the address at the given address
+func Dial(address string) (*connection, error) {
+	conn, err := newClient(address)
+	if err != nil {
+		return nil, err
+	}
+
+	go clientReadLoop(conn)
 
 	return conn, nil
+}
+
+// clientReadLoop is the client's read loop - it accepts datagrams (that should be sent by the server)
+func clientReadLoop(c *connection) {
 }
