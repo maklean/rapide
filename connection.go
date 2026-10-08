@@ -4,6 +4,7 @@ import (
 	"log"
 	"sync"
 
+	"github.com/maklean/rapide/internal/config"
 	"github.com/maklean/rapide/internal/sequence"
 	"github.com/maklean/rapide/internal/structures"
 	"github.com/maklean/rapide/internal/writer"
@@ -48,7 +49,7 @@ func newConnection(writer writer.PacketWriter) *connection {
 		writer:          writer,
 		sequenceInfo:    sequence.NewSequenceInfo(),
 		ackQueue:        structures.NewRingBuffer[unackedPacket](),
-		incomingPackets: make(chan *Packet, 512), // TODO: should probably not use a magic number for this
+		incomingPackets: make(chan *Packet, config.MaxIncomingPackets), // TODO: should probably not use a magic number for this
 	}
 
 	// connection loop - handles incoming packets for connection

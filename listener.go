@@ -5,6 +5,7 @@ import (
 	"net"
 	"sync"
 
+	"github.com/maklean/rapide/internal/config"
 	"github.com/maklean/rapide/internal/writer"
 )
 
@@ -48,7 +49,7 @@ func Listen(address string) (*Listener, error) {
 
 // readLoop is the Listener's read loop - it accepts datagrams, maps them to an existing connection (or creates one), and sends a packet into the connection's incoming packet channel.
 func (l *Listener) readLoop() {
-	buf := make([]byte, 1500) // TODO: use some MTU-safe buffer size for this, and don't use a magic number.
+	buf := make([]byte, config.MaxPayloadSize)
 
 	for {
 		n, addr, err := l.socket.ReadFromUDP(buf)

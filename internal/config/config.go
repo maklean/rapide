@@ -1,0 +1,11 @@
+package config
+
+// MaxPayloadSize is the maximum number of bytes an incoming datagram can be.
+const MaxPayloadSize uint16 = 1472
+
+/*
+MaxIncomingPackets is the maximum number of packets a connection's incoming packets channel can hold.
+
+TODO: if we ever implement a sliding window protocol, this should be the receive window (+ some safety margin)
+*/
+const MaxIncomingPackets uint16 = 256
