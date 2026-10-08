@@ -9,8 +9,8 @@ type SequenceInfo struct {
 }
 
 // NewSequenceInfo creates a new SequenceInfo struct object
-func NewSequenceInfo() SequenceInfo {
-	return SequenceInfo{NextIn: SnFromValue(0), NextOut: SnFromValue(0)}
+func NewSequenceInfo() *SequenceInfo {
+	return &SequenceInfo{NextIn: SnFromValue(0), NextOut: SnFromValue(0)}
 }
 
 // Accept returns whether we accepted the given next incoming sequence number

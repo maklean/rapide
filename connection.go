@@ -19,7 +19,7 @@ type connection struct {
 	writer writer.PacketWriter
 
 	// sequence number information for connection
-	sequenceInfo sequence.SequenceInfo
+	sequenceInfo *sequence.SequenceInfo
 
 	// queue of packets waiting to be acknowledged
 	ackQueue *structures.RingBuffer[unackedPacket]
@@ -77,5 +77,11 @@ func (c *connection) deliver(p *Packet) {
 
 // handlePacket handles the given packet.
 func (c *connection) handlePacket(p *Packet) {
+	// only accept packet if sequence number is greater or equal to this connections incoming sequence number
+	if !c.sequenceInfo.Accept(p.GetSn()) {
+		return
+	}
+
 	log.Printf("Received payload: '%s' (%d bytes)", string(p.Payload), p.PayloadLength)
+	log.Printf("New incoming sequence number = %d", c.sequenceInfo.NextIn.Value)
 }
