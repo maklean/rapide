@@ -7,26 +7,36 @@ type PacketWriter interface {
 	Write(data []byte) error
 }
 
-// ListenerWriter is an implementation of packetWriter for socket's from a Listener.
-type ListenerWriter struct {
-	Socket   *net.UDPConn
-	PeerAddr *net.UDPAddr
+// listenerWriter is an implementation of packetWriter for socket's from a Listener.
+type listenerWriter struct {
+	socket   *net.UDPConn
+	peerAddr *net.UDPAddr
 }
 
-// ClientWriter is an implementation of packetWriter for socket's from a client.
-type ClientWriter struct {
-	Socket   *net.UDPConn
-	PeerAddr *net.UDPAddr
+// clientWriter is an implementation of packetWriter for socket's from a client.
+type clientWriter struct {
+	socket   *net.UDPConn
+	peerAddr *net.UDPAddr
 }
 
-func (lw *ListenerWriter) Write(data []byte) error {
+// createListenerWriter creates a new listenerWriter.
+func CreateListenerWriter(socket *net.UDPConn, peerAddr *net.UDPAddr) *listenerWriter {
+	return &listenerWriter{socket, peerAddr}
+}
+
+// createClientWriter creates a new clientWriter.
+func CreateClientWriter(socket *net.UDPConn, peerAddr *net.UDPAddr) *clientWriter {
+	return &clientWriter{socket, peerAddr}
+}
+
+func (lw *listenerWriter) Write(data []byte) error {
 	// lw.Socket should be the shared socket between the Listener and its peers (hence, why we need to specify a target address)
-	_, err := lw.Socket.WriteToUDP(data, lw.PeerAddr)
+	_, err := lw.socket.WriteToUDP(data, lw.peerAddr)
 	return err
 }
 
-func (cw *ClientWriter) Write(data []byte) error {
+func (cw *clientWriter) Write(data []byte) error {
 	// cw.Socket should be a uniquely owned socket connected to a server
-	_, err := cw.Socket.Write(data)
+	_, err := cw.socket.Write(data)
 	return err
 }

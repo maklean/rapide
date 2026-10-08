@@ -1,8 +1,10 @@
 package rapide
 
 import (
+	"log"
 	"net"
 
+	"github.com/maklean/rapide/internal/config"
 	"github.com/maklean/rapide/internal/writer"
 )
 
@@ -18,7 +20,7 @@ func newClient(address string) (*connection, error) {
 		return nil, err
 	}
 
-	conn := newConnection(&writer.ClientWriter{Socket: socket, PeerAddr: addr})
+	conn := newConnection(socket, writer.CreateClientWriter(socket, addr))
 	return conn, nil
 }
 
@@ -36,4 +38,21 @@ func Dial(address string) (*connection, error) {
 
 // clientReadLoop is the client's read loop - it accepts datagrams (that should be sent by the server)
 func clientReadLoop(c *connection) {
+	buf := make([]byte, config.MaxPayloadSize)
+
+	for {
+		n, _, err := c.socket.ReadFromUDP(buf)
+		if err != nil {
+			log.Println("Failed to read data from incoming datagram:", err)
+			continue
+		}
+
+		packet, err := FromBytes(buf[:n])
+		if err != nil {
+			log.Println("Failed to decode payload from incoming datagram:", err)
+			continue
+		}
+
+		c.deliver(packet)
+	}
 }

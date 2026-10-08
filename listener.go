@@ -42,19 +42,20 @@ func Listen(address string) (*Listener, error) {
 		return nil, err
 	}
 
-	go listener.readLoop()
+	go listener.listenerReadLoop()
 
 	return listener, nil
 }
 
-// readLoop is the Listener's read loop - it accepts datagrams, maps them to an existing connection (or creates one), and sends a packet into the connection's incoming packet channel.
-func (l *Listener) readLoop() {
+// listenerReadLoop is the Listener's read loop - it accepts datagrams, maps them to an existing connection (or creates one), and sends a packet into the connection's incoming packet channel.
+func (l *Listener) listenerReadLoop() {
 	buf := make([]byte, config.MaxPayloadSize)
 
 	for {
 		n, addr, err := l.socket.ReadFromUDP(buf)
 		if err != nil {
-			log.Fatalln("Failed to read data from incoming datagram:", err)
+			log.Println("Failed to read data from incoming datagram:", err)
+			continue
 		}
 
 		packet, err := FromBytes(buf[:n])
@@ -71,7 +72,7 @@ func (l *Listener) readLoop() {
 
 		// add to peers map if it's a new peer
 		if !exists {
-			conn = newConnection(&writer.ListenerWriter{Socket: l.socket, PeerAddr: addr})
+			conn = newConnection(l.socket, writer.CreateListenerWriter(l.socket, addr))
 			l.peers[key] = conn
 		}
 

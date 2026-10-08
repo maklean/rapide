@@ -2,6 +2,7 @@ package rapide
 
 import (
 	"log"
+	"net"
 	"sync"
 
 	"github.com/maklean/rapide/internal/config"
@@ -11,6 +12,9 @@ import (
 )
 
 type connection struct {
+	// socket for this connection
+	socket *net.UDPConn
+
 	// packet writer for this connection
 	writer writer.PacketWriter
 
@@ -44,8 +48,9 @@ func (c *connection) Send(payload []byte) error {
 }
 
 // newConnection creates a new connection struct instance who's connected to the given peer address.
-func newConnection(writer writer.PacketWriter) *connection {
+func newConnection(socket *net.UDPConn, writer writer.PacketWriter) *connection {
 	conn := &connection{
+		socket:          socket,
 		writer:          writer,
 		sequenceInfo:    sequence.NewSequenceInfo(),
 		ackQueue:        structures.NewRingBuffer[unackedPacket](),
