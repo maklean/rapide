@@ -54,7 +54,7 @@ func newConnection(socket *net.UDPConn, writer writer.PacketWriter) *connection 
 		writer:          writer,
 		sequenceInfo:    sequence.NewSequenceInfo(),
 		ackQueue:        structures.NewRingBuffer[unackedPacket](),
-		incomingPackets: make(chan *Packet, config.MaxIncomingPackets), // TODO: should probably not use a magic number for this
+		incomingPackets: make(chan *Packet, config.MaxIncomingPackets),
 	}
 
 	// connection loop - handles incoming packets for connection
