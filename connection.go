@@ -35,6 +35,9 @@ type connection struct {
 
 	// handshake channel
 	established chan struct{}
+
+	// needed for a thread-safe handshake establishment
+	establishedOnce sync.Once
 }
 
 // Send sends a byte payload to the peer address of this connection
@@ -90,11 +93,11 @@ func (c *connection) deliver(p *Packet) {
 // handlePacket handles the given packet.
 func (c *connection) handlePacket(p *Packet) {
 	if p.IsHandshake {
-		// set connection ID if this is a handshake packet, and closed established channel. NOTE: not thread-safe
-		if c.connectionID == 0 {
+		// set connection ID if this is a handshake packet, and closed established channel.
+		c.establishedOnce.Do(func() {
 			c.connectionID = p.ConnectionID
 			close(c.established)
-		}
+		})
 	}
 
 	// only accept packet if sequence number is greater or equal to this connections incoming sequence number

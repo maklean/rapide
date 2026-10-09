@@ -116,7 +116,7 @@ func (l *Listener) listenerReadLoop() {
 }
 
 /*
-generateConnectionID returns a new (unused) connectionID for a new peer connection.
+generateConnectionID returns an unused connectionID for a new peer connection.
 The generated connectionID is in the range: [1, math.MaxUint32]
 */
 func (l *Listener) generateConnectionID() uint32 {
