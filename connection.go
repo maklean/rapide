@@ -1,6 +1,7 @@
 package rapide
 
 import (
+	"errors"
 	"net"
 	"sync"
 
@@ -11,6 +12,9 @@ import (
 )
 
 type connection struct {
+	// identifier for this connection
+	connectionID uint32
+
 	// socket for this connection
 	socket *net.UDPConn
 
@@ -28,11 +32,19 @@ type connection struct {
 
 	// incoming packets channel for connection
 	incomingPackets chan *Packet
+
+	// handshake channel
+	established chan struct{}
 }
 
 // Send sends a byte payload to the peer address of this connection
 func (c *connection) Send(payload []byte) error {
+	if !c.isEstablished() {
+		return errors.New("connection not established")
+	}
+
 	packet := Packet{
+		ConnectionID:      c.connectionID,
 		RawSequenceNumber: c.sequenceInfo.AdvanceOut().Value,
 		PayloadLength:     uint16(len(payload)),
 		Payload:           payload,
@@ -54,6 +66,7 @@ func newConnection(socket *net.UDPConn, writer writer.PacketWriter) *connection 
 		sequenceInfo:    sequence.NewSequenceInfo(),
 		ackQueue:        structures.NewRingBuffer[unackedPacket](),
 		incomingPackets: make(chan *Packet, config.MaxIncomingPackets),
+		established:     make(chan struct{}),
 	}
 
 	// connection loop - handles incoming packets for connection
@@ -76,9 +89,21 @@ func (c *connection) deliver(p *Packet) {
 
 // handlePacket handles the given packet.
 func (c *connection) handlePacket(p *Packet) {
+	if p.IsHandshake {
+		// set connection ID if this is a handshake packet, and closed established channel. NOTE: not thread-safe
+		if c.connectionID == 0 {
+			c.connectionID = p.ConnectionID
+			close(c.established)
+		}
+	}
+
 	// only accept packet if sequence number is greater or equal to this connections incoming sequence number
 	if !c.sequenceInfo.Accept(p.GetSn()) {
 		return
 	}
+}
 
+// isEstablished returns whether a connection with a peer was successfully established.
+func (c *connection) isEstablished() bool {
+	return c.connectionID != 0
 }

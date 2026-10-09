@@ -1,8 +1,10 @@
 package rapide
 
 import (
+	"errors"
 	"log"
 	"net"
+	"time"
 
 	"github.com/maklean/rapide/internal/config"
 	"github.com/maklean/rapide/internal/writer"
@@ -33,7 +35,26 @@ func Dial(address string) (*connection, error) {
 
 	go clientReadLoop(conn)
 
-	return conn, nil
+	// perform handshake with server
+	handshakePacket := Packet{ConnectionID: 0, IsConnect: true}
+	payload, err := handshakePacket.ToBytes()
+	if err != nil {
+		return nil, err
+	}
+
+	err = conn.writer.Write(payload)
+	if err != nil {
+		return nil, err
+	}
+
+	select {
+	case <-conn.established:
+		log.Printf("Established connection with server, got connectionID = %d", conn.connectionID)
+		return conn, nil
+	case <-time.After(time.Duration(config.HandshakeTimeout) * time.Second):
+		// TODO: close socket
+		return nil, errors.New("handshake timed out")
+	}
 }
 
 // clientReadLoop is the client's read loop - it accepts datagrams (that should be sent by the server)

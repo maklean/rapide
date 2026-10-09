@@ -9,3 +9,6 @@ MaxIncomingPackets is the maximum number of packets a connection's incoming pack
 TODO: if we ever implement a sliding window protocol, this should be the receive window (+ some safety margin)
 */
 const MaxIncomingPackets uint16 = 256
+
+// HandshakeTimeout is the number of seconds we wait for a server to response to a sent handshake packet.
+const HandshakeTimeout int = 5

@@ -30,8 +30,12 @@ type Packet struct {
 	// whether this is an acknowledgement packet or not
 	IsAck bool
 
-	// whether this is a handshake packet or not
+	// TODO: rename these to something like IsHandshakeClient/Server
+	// whether this is a handshake packet sent by the client or not
 	IsConnect bool
+
+	// whether this is a handshake packet sent by the server of not
+	IsHandshake bool
 }
 
 type unackedPacket struct {
@@ -93,6 +97,11 @@ func FromBytes(data []byte) (*Packet, error) {
 		return nil, err
 	}
 
+	err = binary.Read(reader, binary.BigEndian, &p.IsHandshake)
+	if err != nil {
+		return nil, err
+	}
+
 	return p, nil
 }
 
@@ -129,6 +138,10 @@ func (p *Packet) ToBytes() ([]byte, error) {
 	}
 
 	if err := binary.Write(buf, binary.BigEndian, p.IsConnect); err != nil {
+		return nil, err
+	}
+
+	if err := binary.Write(buf, binary.BigEndian, p.IsHandshake); err != nil {
 		return nil, err
 	}
 

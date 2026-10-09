@@ -69,6 +69,7 @@ func (l *Listener) listenerReadLoop() {
 		// TODO: implement ConnectionID system later, currently this is vulnerable to NAT mapping changes
 		l.peersMu.Lock()
 
+		// we're gonna assume a connectionID of 0 means they want to perform a handshake.
 		if packet.ConnectionID == 0 {
 			if !packet.IsConnect {
 				log.Println("[ignore] received connection ID of 0 on a non-handshake packet")
@@ -77,16 +78,36 @@ func (l *Listener) listenerReadLoop() {
 
 			// create new peer entry on handshake
 			conn := newConnection(l.socket, writer.CreateListenerWriter(l.socket, addr))
-			packet.ConnectionID = l.generateConnectionID()
-			l.peers[uint32(packet.ConnectionID)] = conn
+			conn.connectionID = l.generateConnectionID()
+			close(conn.established) // not necessary on the server side.
+
+			l.peers[conn.connectionID] = conn
+
+			handshakePacket := Packet{ConnectionID: conn.connectionID, IsHandshake: true}
+			data, err := handshakePacket.ToBytes()
+			if err != nil {
+				continue
+			}
+
+			err = conn.writer.Write(data)
+			if err != nil {
+				continue
+			}
+
+			log.Printf("Sent handshake to client with connectionID = %d", conn.connectionID)
+
+			l.peersMu.Unlock()
+
+			continue
 		}
 
-		conn, exists := l.peers[key]
-
-		// add to peers map if it's a new peer
+		conn, exists := l.peers[packet.ConnectionID]
 		if !exists {
-
+			// unknown connection ID that hasn't established a connection with the server
+			continue
 		}
+
+		log.Printf("Handling packet from connection with ID = %d", conn.connectionID)
 
 		conn.deliver(packet)
 
@@ -94,15 +115,18 @@ func (l *Listener) listenerReadLoop() {
 	}
 }
 
-// generateConnectionID returns a new (unused) connectionID for a new peer connection
+/*
+generateConnectionID returns a new (unused) connectionID for a new peer connection.
+The generated connectionID is in the range: [1, math.MaxUint32]
+*/
 func (l *Listener) generateConnectionID() uint32 {
-	connectionID := uint32(rand.IntN(math.MaxUint32))
+	connectionID := 1 + uint32(rand.IntN(math.MaxUint32))
 
 	_, exists := l.peers[connectionID]
 
-	for !exists {
+	for exists {
 		// generate new connectionID until we proc something that isn't used
-		connectionID = uint32(rand.IntN(math.MaxUint32))
+		connectionID = 1 + uint32(rand.IntN(math.MaxUint32))
 		_, exists = l.peers[connectionID]
 	}
 
