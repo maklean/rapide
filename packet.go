@@ -3,6 +3,8 @@ package rapide
 import (
 	"bytes"
 	"encoding/binary"
+	"fmt"
+	"io"
 	"time"
 
 	"github.com/maklean/rapide/internal/sequence"
@@ -53,52 +55,26 @@ func FromBytes(data []byte) (*Packet, error) {
 	p := &Packet{}
 	reader := bytes.NewReader(data)
 
-	// TODO: clean this up, this can be done inline in the if.
-	err := binary.Read(reader, binary.BigEndian, &p.ConnectionID)
-	if err != nil {
-		return nil, err
+	for _, field := range []any{&p.ConnectionID, &p.RawSequenceNumber, &p.PayloadLength} {
+		if err := binary.Read(reader, binary.BigEndian, field); err != nil {
+			return nil, err
+		}
 	}
 
-	err = binary.Read(reader, binary.BigEndian, &p.RawSequenceNumber)
-	if err != nil {
-		return nil, err
-	}
-
-	err = binary.Read(reader, binary.BigEndian, &p.PayloadLength)
-	if err != nil {
-		return nil, err
+	// safety check to make sure a spoofed datagram doesn't burn through all the memory
+	if int64(p.PayloadLength) > int64(reader.Len()) {
+		return nil, fmt.Errorf("payload length %d exceeds remaining %d bytes", p.PayloadLength, reader.Len())
 	}
 
 	p.Payload = make([]byte, p.PayloadLength)
-
-	err = binary.Read(reader, binary.BigEndian, p.Payload)
-	if err != nil {
+	if _, err := io.ReadFull(reader, p.Payload); err != nil {
 		return nil, err
 	}
 
-	err = binary.Read(reader, binary.BigEndian, &p.IsReliable)
-	if err != nil {
-		return nil, err
-	}
-
-	err = binary.Read(reader, binary.BigEndian, &p.IsAck)
-	if err != nil {
-		return nil, err
-	}
-
-	err = binary.Read(reader, binary.BigEndian, &p.AckSequenceNumber)
-	if err != nil {
-		return nil, err
-	}
-
-	err = binary.Read(reader, binary.BigEndian, &p.IsHandshakeClient)
-	if err != nil {
-		return nil, err
-	}
-
-	err = binary.Read(reader, binary.BigEndian, &p.IsHandshakeServer)
-	if err != nil {
-		return nil, err
+	for _, field := range []any{&p.IsReliable, &p.IsAck, &p.AckSequenceNumber, &p.IsHandshakeClient, &p.IsHandshakeServer} {
+		if err := binary.Read(reader, binary.BigEndian, field); err != nil {
+			return nil, err
+		}
 	}
 
 	return p, nil
@@ -106,42 +82,25 @@ func FromBytes(data []byte) (*Packet, error) {
 
 // Encodes a Packet struct to a sequence of bytes.
 func (p *Packet) ToBytes() ([]byte, error) {
+	// safety check
+	if int64(p.PayloadLength) != int64(len(p.Payload)) {
+		return nil, fmt.Errorf("payload length field %d does not match payload size %d", p.PayloadLength, len(p.Payload))
+	}
+
 	buf := new(bytes.Buffer)
 
-	if err := binary.Write(buf, binary.BigEndian, p.ConnectionID); err != nil {
-		return nil, err
+	for _, field := range []any{p.ConnectionID, p.RawSequenceNumber, p.PayloadLength} {
+		if err := binary.Write(buf, binary.BigEndian, field); err != nil {
+			return nil, err
+		}
 	}
 
-	if err := binary.Write(buf, binary.BigEndian, p.RawSequenceNumber); err != nil {
-		return nil, err
-	}
+	buf.Write(p.Payload)
 
-	if err := binary.Write(buf, binary.BigEndian, p.PayloadLength); err != nil {
-		return nil, err
-	}
-
-	if _, err := buf.Write(p.Payload); err != nil {
-		return nil, err
-	}
-
-	if err := binary.Write(buf, binary.BigEndian, p.IsReliable); err != nil {
-		return nil, err
-	}
-
-	if err := binary.Write(buf, binary.BigEndian, p.IsAck); err != nil {
-		return nil, err
-	}
-
-	if err := binary.Write(buf, binary.BigEndian, p.AckSequenceNumber); err != nil {
-		return nil, err
-	}
-
-	if err := binary.Write(buf, binary.BigEndian, p.IsHandshakeClient); err != nil {
-		return nil, err
-	}
-
-	if err := binary.Write(buf, binary.BigEndian, p.IsHandshakeServer); err != nil {
-		return nil, err
+	for _, field := range []any{p.IsReliable, p.IsAck, p.AckSequenceNumber, p.IsHandshakeClient, p.IsHandshakeServer} {
+		if err := binary.Write(buf, binary.BigEndian, field); err != nil {
+			return nil, err
+		}
 	}
 
 	return buf.Bytes(), nil
