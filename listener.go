@@ -78,7 +78,9 @@ func (l *Listener) listenerReadLoop() {
 			}
 
 			// create new peer entry on handshake
-			l.performHandshake(addr)
+			if err := l.performHandshake(addr); err != nil {
+				log.Printf("Failed to perform handshake with client: %v", err)
+			}
 
 			continue
 		}
