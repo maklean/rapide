@@ -1,6 +1,7 @@
 package rapide
 
 import (
+	"errors"
 	"log"
 	"math"
 	"math/rand/v2"
@@ -56,6 +57,11 @@ func (l *Listener) listenerReadLoop() {
 	for {
 		n, addr, err := l.socket.ReadFromUDP(buf)
 		if err != nil {
+			// if the Listener socket is closed, exit.
+			if errors.Is(err, net.ErrClosed) {
+				return
+			}
+
 			log.Println("Failed to read data from incoming datagram:", err)
 			continue
 		}
@@ -66,52 +72,27 @@ func (l *Listener) listenerReadLoop() {
 			continue
 		}
 
-		// TODO: implement ConnectionID system later, currently this is vulnerable to NAT mapping changes
-		l.peersMu.Lock()
-
-		// we're gonna assume a connectionID of 0 means they want to perform a handshake.
 		if packet.ConnectionID == 0 {
 			if !packet.IsConnect {
-				log.Println("[ignore] received connection ID of 0 on a non-handshake packet")
 				continue
 			}
 
 			// create new peer entry on handshake
-			conn := newConnection(l.socket, writer.CreateListenerWriter(l.socket, addr))
-			conn.connectionID = l.generateConnectionID()
-			close(conn.established) // not necessary on the server side.
-
-			l.peers[conn.connectionID] = conn
-
-			handshakePacket := Packet{ConnectionID: conn.connectionID, IsHandshake: true}
-			data, err := handshakePacket.ToBytes()
-			if err != nil {
-				continue
-			}
-
-			err = conn.writer.Write(data)
-			if err != nil {
-				continue
-			}
-
-			log.Printf("Sent handshake to client with connectionID = %d", conn.connectionID)
-
-			l.peersMu.Unlock()
+			l.performHandshake(addr)
 
 			continue
 		}
 
+		l.peersMu.Lock()
 		conn, exists := l.peers[packet.ConnectionID]
+		l.peersMu.Unlock()
+
 		if !exists {
 			// unknown connection ID that hasn't established a connection with the server
 			continue
 		}
 
-		log.Printf("Handling packet from connection with ID = %d", conn.connectionID)
-
 		conn.deliver(packet)
-
-		l.peersMu.Unlock()
 	}
 }
 
@@ -131,4 +112,37 @@ func (l *Listener) generateConnectionID() uint32 {
 	}
 
 	return connectionID
+}
+
+// performHandshake creates a new peer entry for the given connection, and sends a handshake packet to them.
+func (l *Listener) performHandshake(addr *net.UDPAddr) error {
+	conn := newConnection(l.socket, writer.CreateListenerWriter(l.socket, addr))
+	close(conn.established) // not necessary on the server side.
+
+	l.peersMu.Lock()
+	conn.connectionID = l.generateConnectionID()
+	l.peers[conn.connectionID] = conn
+	l.peersMu.Unlock()
+
+	// removes the peer from the peers map
+	removePeer := func() {
+		l.peersMu.Lock()
+		delete(l.peers, conn.connectionID)
+		l.peersMu.Unlock()
+	}
+
+	// send raw handshake packet to client
+	handshakePacket := Packet{ConnectionID: conn.connectionID, IsHandshake: true}
+	data, err := handshakePacket.ToBytes()
+	if err != nil {
+		removePeer()
+		return err
+	}
+
+	if err := conn.writer.Write(data); err != nil {
+		removePeer()
+		return err
+	}
+
+	return nil
 }

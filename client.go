@@ -49,7 +49,6 @@ func Dial(address string) (*connection, error) {
 
 	select {
 	case <-conn.established:
-		log.Printf("Established connection with server, got connectionID = %d", conn.connectionID)
 		return conn, nil
 	case <-time.After(time.Duration(config.HandshakeTimeout) * time.Second):
 		// TODO: close socket
