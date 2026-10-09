@@ -92,7 +92,7 @@ func (c *connection) deliver(p *Packet) {
 
 // handlePacket handles the given packet.
 func (c *connection) handlePacket(p *Packet) {
-	if p.IsHandshake {
+	if p.IsHandshakeServer {
 		// set connection ID if this is a handshake packet, and closed established channel.
 		c.establishedOnce.Do(func() {
 			c.connectionID = p.ConnectionID

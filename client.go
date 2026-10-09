@@ -36,7 +36,7 @@ func Dial(address string) (*connection, error) {
 	go clientReadLoop(conn)
 
 	// perform handshake with server
-	handshakePacket := Packet{ConnectionID: 0, IsConnect: true}
+	handshakePacket := Packet{ConnectionID: 0, IsHandshakeClient: true}
 	payload, err := handshakePacket.ToBytes()
 	if err != nil {
 		return nil, err

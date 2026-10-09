@@ -73,7 +73,7 @@ func (l *Listener) listenerReadLoop() {
 		}
 
 		if packet.ConnectionID == 0 {
-			if !packet.IsConnect {
+			if !packet.IsHandshakeClient {
 				continue
 			}
 
@@ -132,7 +132,7 @@ func (l *Listener) performHandshake(addr *net.UDPAddr) error {
 	}
 
 	// send raw handshake packet to client
-	handshakePacket := Packet{ConnectionID: conn.connectionID, IsHandshake: true}
+	handshakePacket := Packet{ConnectionID: conn.connectionID, IsHandshakeServer: true}
 	data, err := handshakePacket.ToBytes()
 	if err != nil {
 		removePeer()
