@@ -98,6 +98,8 @@ func (c *connection) handlePacket(p *Packet) {
 			c.connectionID = p.ConnectionID
 			close(c.established)
 		})
+
+		return
 	}
 
 	// only accept packet if sequence number is greater or equal to this connections incoming sequence number

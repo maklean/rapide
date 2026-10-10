@@ -1,11 +1,16 @@
 package sequence
 
+import "sync"
+
 type SequenceInfo struct {
 	// next incoming sequence number
 	NextIn SequenceNumber
 
 	// next outgoing sequence number
 	NextOut SequenceNumber
+
+	// NextOut mutex
+	nextOutMu sync.Mutex
 }
 
 // NewSequenceInfo creates a new SequenceInfo struct object
@@ -25,6 +30,9 @@ func (s *SequenceInfo) Accept(sn SequenceNumber) bool {
 
 // AdvanceOut returns the current next outgoing sequence number, then moves to the next outgoing sequence number.
 func (s *SequenceInfo) AdvanceOut() (sn SequenceNumber) {
+	s.nextOutMu.Lock()
+	defer s.nextOutMu.Unlock()
+
 	sn = s.NextOut
 	s.NextOut = s.NextOut.Next()
 	return
