@@ -34,7 +34,7 @@ type connection struct {
 	ackQueueMu sync.Mutex
 
 	// incoming packets channel for connection
-	incomingPackets chan *Packet
+	incoming chan *Packet
 
 	// handshake channel
 	established chan struct{}
@@ -73,19 +73,15 @@ func (c *connection) Send(payload []byte) error {
 // newConnection creates a new connection struct instance who's connected to the given peer address.
 func newConnection(socket *net.UDPConn, writer writer.PacketWriter) *connection {
 	conn := &connection{
-		socket:          socket,
-		writer:          writer,
-		ackQueue:        structures.NewRingBuffer[unackedPacket](),
-		incomingPackets: make(chan *Packet, config.MaxIncomingPackets),
-		established:     make(chan struct{}),
+		socket:      socket,
+		writer:      writer,
+		ackQueue:    structures.NewRingBuffer[unackedPacket](),
+		incoming:    make(chan *Packet, config.MaxIncomingPackets),
+		established: make(chan struct{}),
 	}
 
 	// connection loop - handles incoming packets for connection
-	go func() {
-		for p := range conn.incomingPackets {
-			conn.handlePacket(p)
-		}
-	}()
+	go conn.run()
 
 	return conn
 }
@@ -93,8 +89,18 @@ func newConnection(socket *net.UDPConn, writer writer.PacketWriter) *connection 
 // deliver adds the given packet to the connections incoming packets channel.
 func (c *connection) deliver(p *Packet) {
 	select {
-	case c.incomingPackets <- p:
+	case c.incoming <- p:
 	default:
+	}
+}
+
+// run is the client's read loop
+func (c *connection) run() {
+	for {
+		select {
+		case packet := <-c.incoming:
+			c.handlePacket(packet)
+		}
 	}
 }
 
