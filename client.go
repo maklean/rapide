@@ -39,11 +39,13 @@ func Dial(address string) (*connection, error) {
 	handshakePacket := Packet{ConnectionID: 0, IsHandshakeClient: true}
 	payload, err := handshakePacket.ToBytes()
 	if err != nil {
+		conn.Close()
 		return nil, err
 	}
 
 	err = conn.writer.Write(payload)
 	if err != nil {
+		conn.Close()
 		return nil, err
 	}
 
@@ -51,7 +53,7 @@ func Dial(address string) (*connection, error) {
 	case <-conn.established:
 		return conn, nil
 	case <-time.After(time.Duration(config.HandshakeTimeout) * time.Second):
-		// TODO: close socket
+		conn.Close()
 		return nil, errors.New("handshake timed out")
 	}
 }
