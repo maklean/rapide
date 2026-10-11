@@ -21,8 +21,11 @@ type connection struct {
 	// packet writer for this connection
 	writer writer.PacketWriter
 
-	// sequence number information for connection
-	sequenceInfo *sequence.SequenceInfo
+	// next incoming sequence number
+	nextIn sequence.SequenceNumber
+
+	// next outgoing sequence number
+	nextOut sequence.SequenceNumber
 
 	// queue of packets waiting to be acknowledged
 	ackQueue *structures.RingBuffer[unackedPacket]
@@ -48,7 +51,7 @@ func (c *connection) Send(payload []byte) error {
 
 	packet := Packet{
 		ConnectionID:      c.connectionID,
-		RawSequenceNumber: c.sequenceInfo.AdvanceOut().Value,
+		RawSequenceNumber: c.nextOut.Value,
 		PayloadLength:     uint16(len(payload)),
 		Payload:           payload,
 	}
@@ -58,7 +61,13 @@ func (c *connection) Send(payload []byte) error {
 		return err
 	}
 
-	return c.writer.Write(data)
+	err = c.writer.Write(data)
+
+	if err == nil {
+		c.nextOut = c.nextOut.Next()
+	}
+
+	return err
 }
 
 // newConnection creates a new connection struct instance who's connected to the given peer address.
@@ -66,7 +75,6 @@ func newConnection(socket *net.UDPConn, writer writer.PacketWriter) *connection 
 	conn := &connection{
 		socket:          socket,
 		writer:          writer,
-		sequenceInfo:    sequence.NewSequenceInfo(),
 		ackQueue:        structures.NewRingBuffer[unackedPacket](),
 		incomingPackets: make(chan *Packet, config.MaxIncomingPackets),
 		established:     make(chan struct{}),
@@ -103,7 +111,7 @@ func (c *connection) handlePacket(p *Packet) {
 	}
 
 	// only accept packet if sequence number is greater or equal to this connections incoming sequence number
-	if !c.sequenceInfo.Accept(p.GetSn()) {
+	if c.nextIn.Gt(p.GetSn()) {
 		return
 	}
 }
