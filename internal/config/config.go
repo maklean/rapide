@@ -10,5 +10,8 @@ TODO: if we ever implement a sliding window protocol, this should be the receive
 */
 const MaxIncomingPackets uint16 = 256
 
+// MaxOutgoingPackets is the maximum number of packets a connection's outgoing packets channel can hold.
+const MaxOutgoingPackets uint16 = 256
+
 // HandshakeTimeout is the number of seconds we wait for a server to response to a sent handshake packet.
 const HandshakeTimeout int = 5

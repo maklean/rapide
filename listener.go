@@ -118,7 +118,7 @@ func (l *Listener) generateConnectionID() uint32 {
 
 // performHandshake creates a new peer entry for the given connection, and sends a handshake packet to them.
 func (l *Listener) performHandshake(addr *net.UDPAddr) error {
-	conn := newConnection(l.socket, writer.CreateListenerWriter(l.socket, addr))
+	conn := newConnection(l.socket, writer.CreateListenerWriter(l.socket, addr), nil)
 	close(conn.established) // not necessary on the server side.
 
 	l.peersMu.Lock()
@@ -128,6 +128,13 @@ func (l *Listener) performHandshake(addr *net.UDPAddr) error {
 
 	// removes the peer from the peers map
 	removePeer := func() {
+		l.peersMu.Lock()
+		delete(l.peers, conn.connectionID)
+		l.peersMu.Unlock()
+	}
+
+	conn.onClose = func() {
+		log.Println("removing peer...")
 		l.peersMu.Lock()
 		delete(l.peers, conn.connectionID)
 		l.peersMu.Unlock()

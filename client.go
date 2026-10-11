@@ -22,7 +22,7 @@ func newClient(address string) (*connection, error) {
 		return nil, err
 	}
 
-	conn := newConnection(socket, writer.CreateClientWriter(socket, addr))
+	conn := newConnection(socket, writer.CreateClientWriter(socket, addr), func() { socket.Close() })
 	return conn, nil
 }
 
