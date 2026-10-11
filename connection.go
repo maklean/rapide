@@ -124,7 +124,7 @@ func (c *connection) run() {
 	for {
 		select {
 		case packet := <-c.incoming:
-			c.handlePacket(packet)
+			c.handleIncoming(packet)
 		case payload := <-c.outgoing:
 			c.handleOutgoing(payload)
 		case <-c.closed:
@@ -144,8 +144,8 @@ func (c *connection) run() {
 	}
 }
 
-// handlePacket handles the given packet.
-func (c *connection) handlePacket(p *Packet) {
+// handleIncoming handles the given packet from the peer.
+func (c *connection) handleIncoming(p *Packet) {
 	if p.IsHandshakeServer {
 		// set connection ID if this is a handshake packet, and closed established channel.
 		c.establishedOnce.Do(func() {
