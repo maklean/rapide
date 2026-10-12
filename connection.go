@@ -158,9 +158,14 @@ func (c *connection) handleOutgoing(payload []byte) {
 	}
 
 	// TODO: no idea how to return errors to the user from here.
-	data, _ := packet.ToBytes()
+	data, err := packet.ToBytes()
+	if err != nil {
+		return
+	}
 
-	c.writer.Write(data)
+	if c.writer.Write(data) == nil {
+		c.nextOut = c.nextOut.Next()
+	}
 }
 
 // isClosed returns whether a connection with a peer was terminated.
