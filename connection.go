@@ -122,17 +122,18 @@ func (c *connection) run() {
 			c.handleOutgoing(payload)
 		case <-c.closed:
 			// flush outgoing channel, run close closure, send finished signal by exiting
-			close(c.outgoing)
+			for {
+				select {
+				case payload := <-c.outgoing:
+					c.handleOutgoing(payload)
+				default:
+					if c.onClose != nil {
+						c.onClose()
+					}
 
-			for payload := range c.outgoing {
-				c.handleOutgoing(payload)
+					return
+				}
 			}
-
-			if c.onClose != nil {
-				c.onClose()
-			}
-
-			return
 		}
 	}
 }
