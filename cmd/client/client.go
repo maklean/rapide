@@ -20,6 +20,6 @@ func main() {
 		}
 	}
 
+	log.Println("Sent messages to server.")
 	conn.Close()
-	log.Println("Sent message to server.")
 }

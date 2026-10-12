@@ -36,7 +36,11 @@ func Dial(address string) (*connection, error) {
 
 	log.Printf("Got handshake response from server! ConnectionID = %d", connectionID)
 
-	return newConnection(connectionID, socket, writer.CreateClientWriter(socket), func() { socket.Close() }), nil
+	conn := newConnection(connectionID, socket, writer.CreateClientWriter(socket), func() { socket.Close() })
+
+	go clientReadLoop(conn)
+
+	return conn, nil
 }
 
 // sendHandshakeRequest sends a handshake request to the peer/Listener, returns the connectionId if successful.
@@ -46,7 +50,7 @@ func sendHandshakeRequest(socket *net.UDPConn) (uint32, error) {
 		return 0, fmt.Errorf("failed to serialize handshake packet to bytes: %v", err)
 	}
 
-	buf := make([]byte, config.MaxIncomingPackets)
+	buf := make([]byte, config.MaxPayloadSize)
 	deadline := time.Now().Add(time.Duration(config.HandshakeTimeout) * time.Second)
 
 	for time.Now().Before(deadline) {
@@ -101,6 +105,11 @@ func clientReadLoop(c *connection) {
 		packet, err := FromBytes(buf[:n])
 		if err != nil {
 			log.Println("Failed to decode payload from incoming datagram:", err)
+			continue
+		}
+
+		// ignore duplicate handshake responses
+		if packet.IsHandshakeServer {
 			continue
 		}
 

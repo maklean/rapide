@@ -16,5 +16,9 @@ const MaxOutgoingPackets uint16 = 256
 // HandshakeTimeout is the number of seconds we wait for a server to response to a sent handshake packet.
 const HandshakeTimeout int = 5
 
-// HandshakeRequestResend is the number of milliseconds we wait before resending a handshake packet.
-const HandshakeRequestResend int = 500
+/*
+HandshakeRequestResend is the number of milliseconds we wait before resending a handshake packet.
+
+NOTE: ceil(HandshakeTimeout * 1000 / HandshakeRequestResend) is the number of handshake packets that can get sent at the very most.
+*/
+const HandshakeRequestResend int = 750
