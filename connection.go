@@ -95,6 +95,7 @@ func newConnection(socket *net.UDPConn, writer writer.PacketWriter, onClose func
 	conn := &connection{
 		socket:      socket,
 		writer:      writer,
+		onClose:     onClose,
 		ackQueue:    structures.NewRingBuffer[unackedPacket](),
 		incoming:    make(chan *Packet, config.MaxIncomingPackets),
 		outgoing:    make(chan []byte, config.MaxOutgoingPackets),

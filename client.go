@@ -60,16 +60,13 @@ func Dial(address string) (*connection, error) {
 
 // clientReadLoop is the client's read loop - it accepts datagrams (that should be sent by the server)
 func clientReadLoop(c *connection) {
-	// TODO: this goroutine does not get closed if the connection terminates...
 	buf := make([]byte, config.MaxPayloadSize)
 
 	for {
 		n, _, err := c.socket.ReadFromUDP(buf)
 		if err != nil {
 			// if the Client's socket is closed, exit.
-			if errors.Is(err, net.ErrClosed) {
-				c.onClose = nil
-				c.Close()
+			if errors.Is(err, net.ErrClosed) || c.isClosed() {
 				return
 			}
 
