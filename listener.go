@@ -99,6 +99,9 @@ func (l *Listener) listenerReadLoop() {
 func (l *Listener) generateConnectionID() uint32 {
 	connectionID := rand.Uint32()
 
+	l.peersMu.Lock()
+	defer l.peersMu.Unlock()
+
 	_, exists := l.peers[connectionID]
 
 	for exists {
