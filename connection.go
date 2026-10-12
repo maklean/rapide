@@ -40,12 +40,6 @@ type connection struct {
 	// outgoing payloads channel for connection
 	outgoing chan []byte
 
-	// handshake channel
-	established chan struct{}
-
-	// needed for a thread-safe handshake establishment
-	establishedOnce sync.Once
-
 	// signal for closing connection
 	closed chan struct{}
 
@@ -61,9 +55,7 @@ type connection struct {
 
 // Send sends a byte payload to the peer address of this connection
 func (c *connection) Send(payload []byte) error {
-	if !c.isEstablished() {
-		return errors.New("connection not established")
-	} else if c.isClosed() {
+	if c.isClosed() {
 		return errors.New("connection is closed")
 	}
 
@@ -90,18 +82,18 @@ func (c *connection) Close() error {
 	return nil
 }
 
-// newConnection creates a new connection struct instance who's connected to the given peer address.
-func newConnection(socket *net.UDPConn, writer writer.PacketWriter, onClose func()) *connection {
+// newConnection creates a new connection struct instance whose connected to the given peer address.
+func newConnection(connectionID uint32, socket *net.UDPConn, writer writer.PacketWriter, onClose func()) *connection {
 	conn := &connection{
-		socket:      socket,
-		writer:      writer,
-		onClose:     onClose,
-		ackQueue:    structures.NewRingBuffer[unackedPacket](),
-		incoming:    make(chan *Packet, config.MaxIncomingPackets),
-		outgoing:    make(chan []byte, config.MaxOutgoingPackets),
-		established: make(chan struct{}),
-		closed:      make(chan struct{}),
-		finished:    make(chan struct{}),
+		connectionID: connectionID,
+		socket:       socket,
+		writer:       writer,
+		onClose:      onClose,
+		ackQueue:     structures.NewRingBuffer[unackedPacket](),
+		incoming:     make(chan *Packet, config.MaxIncomingPackets),
+		outgoing:     make(chan []byte, config.MaxOutgoingPackets),
+		closed:       make(chan struct{}),
+		finished:     make(chan struct{}),
 	}
 
 	// connection loop - handles incoming packets for connection
@@ -147,16 +139,6 @@ func (c *connection) run() {
 
 // handleIncoming handles the given packet from the peer.
 func (c *connection) handleIncoming(p *Packet) {
-	if p.IsHandshakeServer {
-		// set connection ID if this is a handshake packet, and closed established channel.
-		c.establishedOnce.Do(func() {
-			c.connectionID = p.ConnectionID
-			close(c.established)
-		})
-
-		return
-	}
-
 	// only accept packet if sequence number is greater or equal to this connections incoming sequence number
 	if c.nextIn.Gt(p.GetSn()) {
 		return
@@ -178,16 +160,6 @@ func (c *connection) handleOutgoing(payload []byte) {
 	data, _ := packet.ToBytes()
 
 	c.writer.Write(data)
-}
-
-// isEstablished returns whether a connection with a peer was successfully established.
-func (c *connection) isEstablished() bool {
-	select {
-	case <-c.established:
-		return true
-	default:
-		return false
-	}
 }
 
 // isClosed returns whether a connection with a peer was terminated.

@@ -15,8 +15,7 @@ type listenerWriter struct {
 
 // clientWriter is an implementation of packetWriter for socket's from a client.
 type clientWriter struct {
-	socket   *net.UDPConn
-	peerAddr *net.UDPAddr
+	socket *net.UDPConn
 }
 
 // createListenerWriter creates a new listenerWriter.
@@ -25,8 +24,8 @@ func CreateListenerWriter(socket *net.UDPConn, peerAddr *net.UDPAddr) *listenerW
 }
 
 // createClientWriter creates a new clientWriter.
-func CreateClientWriter(socket *net.UDPConn, peerAddr *net.UDPAddr) *clientWriter {
-	return &clientWriter{socket, peerAddr}
+func CreateClientWriter(socket *net.UDPConn) *clientWriter {
+	return &clientWriter{socket}
 }
 
 func (lw *listenerWriter) Write(data []byte) error {
