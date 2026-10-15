@@ -18,31 +18,31 @@ func (sn SequenceNumber) Next() (snN SequenceNumber) {
 
 // Le returns whether the current sequence number is less than the given one.
 func (sn SequenceNumber) Le(other SequenceNumber) bool {
-	return sn.distance(other) < 0
+	return sn.Distance(other) < 0
 }
 
 // Gt returns whether the current sequence number is greater than the given one.
 func (sn SequenceNumber) Gt(other SequenceNumber) bool {
-	return sn.distance(other) > 0
+	return sn.Distance(other) > 0
 }
 
 // Leq returns whether the current sequence number is less than or equal than the given one.
 func (sn SequenceNumber) Leq(other SequenceNumber) bool {
-	return sn.distance(other) <= 0
+	return sn.Distance(other) <= 0
 }
 
 // Geq returns whether the current sequence number is greater than or equal than the given one.
 func (sn SequenceNumber) Geq(other SequenceNumber) bool {
-	return sn.distance(other) >= 0
+	return sn.Distance(other) >= 0
 }
 
 // Eq returns whether the current sequence number is equal to the given one.
 func (sn SequenceNumber) Eq(other SequenceNumber) bool {
-	return sn.distance(other) == 0
+	return sn.Distance(other) == 0
 }
 
 // distance returns the signed distance between the current and given sequence number.
-func (sn SequenceNumber) distance(other SequenceNumber) int16 {
+func (sn SequenceNumber) Distance(other SequenceNumber) int16 {
 	var diff uint16 = sn.Value - other.Value
 	return int16(diff)
 }

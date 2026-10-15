@@ -3,12 +3,13 @@ package rapide
 import (
 	"errors"
 	"log"
+	"math/rand/v2"
 	"net"
 	"sync"
+	"time"
 
 	"github.com/maklean/rapide/internal/config"
 	"github.com/maklean/rapide/internal/sequence"
-	"github.com/maklean/rapide/internal/structures"
 	"github.com/maklean/rapide/internal/writer"
 )
 
@@ -28,11 +29,11 @@ type connection struct {
 	// next outgoing sequence number
 	nextOut sequence.SequenceNumber
 
-	// queue of packets waiting to be acknowledged
-	ackQueue *structures.RingBuffer[unackedPacket]
+	// map of packets waiting to be acknowledged
+	unacked map[uint16]*unackedPacket
 
-	// mutex for the ackQueue
-	ackQueueMu sync.Mutex
+	// map of packets that have arrived
+	pending map[uint16]*Packet
 
 	// incoming packets channel for connection
 	incoming chan *Packet
@@ -89,7 +90,8 @@ func newConnection(connectionID uint32, socket *net.UDPConn, writer writer.Packe
 		socket:       socket,
 		writer:       writer,
 		onClose:      onClose,
-		ackQueue:     structures.NewRingBuffer[unackedPacket](),
+		unacked:      make(map[uint16]*unackedPacket),
+		pending:      make(map[uint16]*Packet),
 		incoming:     make(chan *Packet, config.MaxIncomingPackets),
 		outgoing:     make(chan []byte, config.MaxOutgoingPackets),
 		closed:       make(chan struct{}),
@@ -114,14 +116,20 @@ func (c *connection) deliver(p *Packet) {
 func (c *connection) run() {
 	defer close(c.finished)
 
+	ticker := time.NewTicker(time.Duration(config.ConnectionTick) * time.Millisecond)
+
 	for {
 		select {
 		case packet := <-c.incoming:
 			c.handleIncoming(packet)
 		case payload := <-c.outgoing:
 			c.handleOutgoing(payload)
+		case t := <-ticker.C:
+			c.handleTick(t)
 		case <-c.closed:
-			// flush outgoing channel, run close closure, send finished signal by exiting
+			// end ticker, flush outgoing channel, run close closure, send finished signal by exiting
+			ticker.Stop()
+
 			for {
 				select {
 				case payload := <-c.outgoing:
@@ -140,12 +148,65 @@ func (c *connection) run() {
 
 // handleIncoming handles the given packet from the peer.
 func (c *connection) handleIncoming(p *Packet) {
-	// only accept packet if sequence number is greater or equal to this connections incoming sequence number
-	if c.nextIn.Gt(p.GetSn()) {
+	if p.IsAck {
+		// NOTE: this should handle duplicate ACKs because it no-ops on non-existent keys
+		log.Printf("server acknowledged %d, deleting...", p.AckSequenceNumber)
+		delete(c.unacked, p.AckSequenceNumber)
 		return
 	}
 
-	log.Printf("Got: %s", string(p.Payload))
+	sn := p.GetSn()
+	dist := sn.Distance(c.nextIn)
+
+	if dist < 0 {
+		// lost ACK or duplicate packet, either way resend ACK
+		c.sendAck(sn)
+		return
+	}
+
+	if dist >= int16(config.ReceiveWindowLength) {
+		// only accept packets in our receive window
+		return
+	}
+
+	if rand.IntN(100) <= 50 {
+		c.sendAck(sn)
+	} else {
+		return
+	}
+
+	c.pending[sn.Value] = p
+	log.Printf("pending on %d", sn.Value)
+
+	// reorder packets that came in
+	for {
+		pending, exists := c.pending[c.nextIn.Value]
+
+		// force correct order
+		if !exists {
+			log.Printf("%d hasn't arrived yet, break...", c.nextIn.Value)
+			break
+		}
+
+		delete(c.pending, c.nextIn.Value)
+		c.nextIn = c.nextIn.Next()
+		log.Printf("Got: %s", string(pending.Payload))
+	}
+}
+
+// sendAck sends an acknowledgement packet for the given sequence number to the peer
+func (c *connection) sendAck(sn sequence.SequenceNumber) {
+	ackPacket, err := (&Packet{ConnectionID: c.connectionID, IsAck: true, AckSequenceNumber: sn.Value}).ToBytes()
+	if err != nil {
+		return
+	}
+
+	err = c.writer.Write(ackPacket)
+	if err != nil {
+		return
+	}
+
+	log.Println("Sent ACK packet to peer.")
 }
 
 // handleOutgoing handles sending the given payload to the peer.
@@ -163,8 +224,36 @@ func (c *connection) handleOutgoing(payload []byte) {
 		return
 	}
 
-	if c.writer.Write(data) == nil {
-		c.nextOut = c.nextOut.Next()
+	if err := c.writer.Write(data); err != nil {
+		return
+	}
+
+	c.unacked[c.nextOut.Value] = &unackedPacket{packet: data, sentAt: time.Now(), retries: 0}
+	c.nextOut = c.nextOut.Next()
+}
+
+// handleTick handles a tick at the given time for the connection.
+func (c *connection) handleTick(t time.Time) {
+	// check for retransmission of unacked packets
+	for sn, up := range c.unacked {
+		if t.Sub(up.sentAt).Seconds() < float64(config.ReliablePacketTimeout) {
+			continue
+		}
+
+		if up.retries > uint8(config.MaxRetransmissionRetries) {
+			// connection is considered dead once we've passed the max number of retries
+			log.Printf("MaxRetransmissionsRetries passed for 'sn = %d', closing connection with peer...", sn)
+			close(c.closed)
+
+			return
+		}
+
+		// retransmit packet
+		if err := c.writer.Write(up.packet); err == nil {
+			log.Printf("retransmitted packet (sn = %d) because it went unacknowledged.", sn)
+			up.sentAt = time.Now()
+			up.retries += 1
+		}
 	}
 }
 

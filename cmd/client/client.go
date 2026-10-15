@@ -21,5 +21,6 @@ func main() {
 	}
 
 	log.Println("Sent messages to server.")
+	select {}
 	conn.Close()
 }
