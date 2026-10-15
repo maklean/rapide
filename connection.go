@@ -3,7 +3,6 @@ package rapide
 import (
 	"errors"
 	"log"
-	"math/rand/v2"
 	"net"
 	"sync"
 	"time"
@@ -169,11 +168,7 @@ func (c *connection) handleIncoming(p *Packet) {
 		return
 	}
 
-	if rand.IntN(100) <= 50 {
-		c.sendAck(sn)
-	} else {
-		return
-	}
+	c.sendAck(sn)
 
 	c.pending[sn.Value] = p
 	log.Printf("pending on %d", sn.Value)
