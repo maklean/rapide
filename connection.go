@@ -22,23 +22,26 @@ type connection struct {
 	// packet writer for this connection
 	writer writer.PacketWriter
 
-	// next incoming sequence number
-	nextIn sequence.SequenceNumber
+	// reliable sequence numbers
+	reliableSp sequence.SequencePack
 
-	// next outgoing sequence number
-	nextOut sequence.SequenceNumber
+	// unreliable sequence numbers
+	unreliableSp sequence.SequencePack
 
-	// map of packets waiting to be acknowledged
+	// map of reliable packets waiting to be acknowledged
 	unacked map[uint16]*unackedPacket
 
-	// map of packets that have arrived
+	// map of reliable packets that have arrived
 	pending map[uint16]*Packet
 
 	// incoming packets channel for connection
 	incoming chan *Packet
 
-	// outgoing payloads channel for connection
-	outgoing chan []byte
+	// outgoing reliable payloads channel for connection
+	relOutgoing chan []byte
+
+	// outgoing unreliable payloads channel for connection
+	unrelOutgoing chan []byte
 
 	// signal for closing connection
 	closed chan struct{}
@@ -54,17 +57,25 @@ type connection struct {
 }
 
 // Send sends a byte payload to the peer address of this connection
-func (c *connection) Send(payload []byte) error {
+func (c *connection) Send(payload []byte, reliable bool) error {
 	if c.isClosed() {
 		return errors.New("connection is closed")
 	}
 
-	select {
-	case c.outgoing <- payload:
-		return nil
-	default:
-		return errors.New("outgoing queue full")
+	if reliable {
+		select {
+		case c.relOutgoing <- payload:
+		default:
+			return errors.New("outgoing queue full")
+		}
+	} else {
+		select {
+		case c.unrelOutgoing <- payload:
+		default:
+		}
 	}
+
+	return nil
 }
 
 // Close closes the connection with the peer.
@@ -85,16 +96,19 @@ func (c *connection) Close() error {
 // newConnection creates a new connection struct instance whose connected to the given peer address.
 func newConnection(connectionID uint32, socket *net.UDPConn, writer writer.PacketWriter, onClose func()) *connection {
 	conn := &connection{
-		connectionID: connectionID,
-		socket:       socket,
-		writer:       writer,
-		onClose:      onClose,
-		unacked:      make(map[uint16]*unackedPacket),
-		pending:      make(map[uint16]*Packet),
-		incoming:     make(chan *Packet, config.MaxIncomingPackets),
-		outgoing:     make(chan []byte, config.MaxOutgoingPackets),
-		closed:       make(chan struct{}),
-		finished:     make(chan struct{}),
+		connectionID:  connectionID,
+		socket:        socket,
+		writer:        writer,
+		onClose:       onClose,
+		reliableSp:    sequence.NewSequencePack(),
+		unreliableSp:  sequence.NewSequencePack(),
+		unacked:       make(map[uint16]*unackedPacket),
+		pending:       make(map[uint16]*Packet),
+		incoming:      make(chan *Packet, config.MaxIncomingPackets),
+		relOutgoing:   make(chan []byte, config.MaxOutgoingPackets),
+		unrelOutgoing: make(chan []byte, config.MaxIncomingPackets),
+		closed:        make(chan struct{}),
+		finished:      make(chan struct{}),
 	}
 
 	// connection loop - handles incoming packets for connection
@@ -120,19 +134,25 @@ func (c *connection) run() {
 	for {
 		select {
 		case packet := <-c.incoming:
-			c.handleIncoming(packet)
-		case payload := <-c.outgoing:
-			c.handleOutgoing(payload)
+			if packet.IsReliable || packet.IsAck {
+				c.handleReliableIncoming(packet)
+			} else {
+				c.handleUnreliableIncoming(packet)
+			}
+		case payload := <-c.relOutgoing:
+			c.handleOutgoing(payload, true)
+		case payload := <-c.unrelOutgoing:
+			c.handleOutgoing(payload, false)
 		case t := <-ticker.C:
 			c.handleTick(t)
 		case <-c.closed:
-			// end ticker, flush outgoing channel, run close closure, send finished signal by exiting
+			// end ticker, flush (only) reliable outgoing channel, run close closure, send finished signal by exiting
 			ticker.Stop()
 
 			for {
 				select {
-				case payload := <-c.outgoing:
-					c.handleOutgoing(payload)
+				case payload := <-c.relOutgoing:
+					c.handleOutgoing(payload, true)
 				default:
 					if c.onClose != nil {
 						c.onClose()
@@ -146,7 +166,7 @@ func (c *connection) run() {
 }
 
 // handleIncoming handles the given packet from the peer.
-func (c *connection) handleIncoming(p *Packet) {
+func (c *connection) handleReliableIncoming(p *Packet) {
 	if p.IsAck {
 		// NOTE: this should handle duplicate ACKs because it no-ops on non-existent keys
 		log.Printf("server acknowledged %d, deleting...", p.AckSequenceNumber)
@@ -155,7 +175,7 @@ func (c *connection) handleIncoming(p *Packet) {
 	}
 
 	sn := p.GetSn()
-	dist := sn.Distance(c.nextIn)
+	dist := sn.Distance(c.reliableSp.NextIn)
 
 	if dist < 0 {
 		// lost ACK or duplicate packet, either way resend ACK
@@ -175,18 +195,31 @@ func (c *connection) handleIncoming(p *Packet) {
 
 	// reorder packets that came in
 	for {
-		pending, exists := c.pending[c.nextIn.Value]
+		pending, exists := c.pending[c.reliableSp.NextIn.Value]
 
 		// force correct order
 		if !exists {
-			log.Printf("%d hasn't arrived yet, break...", c.nextIn.Value)
+			log.Printf("%d hasn't arrived yet, break...", c.reliableSp.NextIn.Value)
 			break
 		}
 
-		delete(c.pending, c.nextIn.Value)
-		c.nextIn = c.nextIn.Next()
+		delete(c.pending, c.reliableSp.NextIn.Value)
+		c.reliableSp.NextIn = c.reliableSp.NextIn.Next()
 		log.Printf("Got: %s", string(pending.Payload))
 	}
+}
+
+func (c *connection) handleUnreliableIncoming(p *Packet) {
+	sn := p.GetSn()
+
+	if c.unreliableSp.NextIn.Gt(sn) {
+		// reject if the next incoming sequence number is greater, reject
+		return
+	}
+
+	c.unreliableSp.NextIn = sn.Next()
+
+	log.Printf("got unreliable (sn = %d): '%s'", p.RawSequenceNumber, string(p.Payload))
 }
 
 // sendAck sends an acknowledgement packet for the given sequence number to the peer
@@ -205,15 +238,23 @@ func (c *connection) sendAck(sn sequence.SequenceNumber) {
 }
 
 // handleOutgoing handles sending the given payload to the peer.
-func (c *connection) handleOutgoing(payload []byte) {
-	packet := Packet{
-		ConnectionID:      c.connectionID,
-		RawSequenceNumber: c.nextOut.Value,
-		PayloadLength:     uint16(len(payload)),
-		Payload:           payload,
+func (c *connection) handleOutgoing(payload []byte, reliable bool) {
+	var sn uint16
+
+	if reliable {
+		sn = c.reliableSp.NextOut.Value
+	} else {
+		sn = c.unreliableSp.NextOut.Value
 	}
 
-	// TODO: no idea how to return errors to the user from here.
+	packet := Packet{
+		ConnectionID:      c.connectionID,
+		RawSequenceNumber: sn,
+		PayloadLength:     uint16(len(payload)),
+		Payload:           payload,
+		IsReliable:        reliable,
+	}
+
 	data, err := packet.ToBytes()
 	if err != nil {
 		return
@@ -223,8 +264,12 @@ func (c *connection) handleOutgoing(payload []byte) {
 		return
 	}
 
-	c.unacked[c.nextOut.Value] = &unackedPacket{packet: data, sentAt: time.Now(), retries: 0}
-	c.nextOut = c.nextOut.Next()
+	if reliable {
+		c.unacked[c.reliableSp.NextOut.Value] = &unackedPacket{packet: data, sentAt: time.Now(), retries: 0}
+		c.reliableSp.NextOut = c.reliableSp.NextOut.Next()
+	} else {
+		c.unreliableSp.NextOut = c.unreliableSp.NextOut.Next()
+	}
 }
 
 // handleTick handles a tick at the given time for the connection.
@@ -238,7 +283,6 @@ func (c *connection) handleTick(t time.Time) {
 		if up.retries > uint8(config.MaxRetransmissionRetries) {
 			// connection is considered dead once we've passed the max number of retries
 			log.Printf("MaxRetransmissionsRetries passed for 'sn = %d', closing connection with peer...", sn)
-			close(c.closed)
 
 			return
 		}
