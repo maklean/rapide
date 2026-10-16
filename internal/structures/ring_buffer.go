@@ -2,6 +2,9 @@ package structures
 
 import "errors"
 
+var ringBufferOutOfBounds error = errors.New("out of bounds access on RingBuffer")
+var ringBufferPopFromEmpty error = errors.New("cannot pop from empty RingBuffer")
+
 // An RingBuffer/ArrayDeque from OpenDataStructures
 type RingBuffer[T any] struct {
 	// start of the ring buffer
@@ -32,7 +35,7 @@ func (r *RingBuffer[T]) AddLast(x T) {
 // PopFirst removes and returns the element at the start of the RingBuffer.
 func (r *RingBuffer[T]) PopFirst() (*T, error) {
 	if r.size == 0 {
-		return nil, errors.New("cannot pop from empty RingBuffer")
+		return nil, ringBufferPopFromEmpty
 	}
 
 	return r.Remove(0)
@@ -41,7 +44,7 @@ func (r *RingBuffer[T]) PopFirst() (*T, error) {
 // PopLast removes and returns the element at the end of the RingBuffer.
 func (r *RingBuffer[T]) PopLast() (*T, error) {
 	if r.size == 0 {
-		return nil, errors.New("cannot pop from empty RingBuffer")
+		return nil, ringBufferPopFromEmpty
 	}
 
 	return r.Remove(r.size - 1)
@@ -50,7 +53,7 @@ func (r *RingBuffer[T]) PopLast() (*T, error) {
 // Get returns the element at index 'i' in the RingBuffer.
 func (r *RingBuffer[T]) Get(i int) (*T, error) {
 	if i < 0 || i >= r.size {
-		return nil, errors.New("out of bounds access on RingBuffer")
+		return nil, ringBufferOutOfBounds
 	}
 
 	return &r.buffer[r.bufIdx(i)], nil
@@ -59,7 +62,7 @@ func (r *RingBuffer[T]) Get(i int) (*T, error) {
 // Set sets the element at index 'i' to 'x'. Returns the element at index 'i' previously.
 func (r *RingBuffer[T]) Set(i int, x T) (*T, error) {
 	if i < 0 || i >= r.size {
-		return nil, errors.New("out of bounds access on RingBuffer")
+		return nil, ringBufferOutOfBounds
 	}
 
 	y := r.buffer[r.bufIdx(i)]
@@ -71,7 +74,7 @@ func (r *RingBuffer[T]) Set(i int, x T) (*T, error) {
 // Add adds 'x' to index 'i' of the RingBuffer.
 func (r *RingBuffer[T]) Add(i int, x T) error {
 	if i < 0 || i > r.size {
-		return errors.New("out of bounds access on RingBuffer")
+		return ringBufferOutOfBounds
 	}
 
 	if r.size == len(r.buffer) {
@@ -105,7 +108,7 @@ func (r *RingBuffer[T]) Add(i int, x T) error {
 // Remove removes the element at index 'i' and returns it.
 func (r *RingBuffer[T]) Remove(i int) (*T, error) {
 	if i < 0 || i >= r.size {
-		return nil, errors.New("out of bounds access on RingBuffer")
+		return nil, ringBufferOutOfBounds
 	}
 
 	y := r.buffer[r.bufIdx(i)]
