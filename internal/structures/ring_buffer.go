@@ -93,7 +93,6 @@ func (r *RingBuffer[T]) Add(i int, x T) error {
 			r.buffer[r.bufIdx(k)] = r.buffer[r.bufIdx(k+1)]
 		}
 	} else {
-		// shift elements from [i, n-1] to the right
 		for k := r.size; k > i; k-- {
 			r.buffer[r.bufIdx(k)] = r.buffer[r.bufIdx(k-1)]
 		}
@@ -114,14 +113,12 @@ func (r *RingBuffer[T]) Remove(i int) (*T, error) {
 	y := r.buffer[r.bufIdx(i)]
 
 	if i < r.size/2 {
-		// shift elements from [0, i-1] to the right, and move the RingBuffer start up
 		for k := i; k > 0; k-- {
 			r.buffer[r.bufIdx(k)] = r.buffer[r.bufIdx(k-1)]
 		}
 
 		r.start = (r.start + 1) % len(r.buffer)
 	} else {
-		// shift elements from [i+1, n-1] to the left
 		for k := i; k < r.size-1; k++ {
 			r.buffer[r.bufIdx(k)] = r.buffer[r.bufIdx(k+1)]
 		}
