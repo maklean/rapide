@@ -62,15 +62,19 @@ func (c *connection) Send(payload []byte, reliable bool) error {
 		return errors.New("connection is closed")
 	}
 
+	// sender could reuse payload later
+	cpy := make([]byte, len(payload))
+	copy(cpy, payload)
+
 	if reliable {
 		select {
-		case c.relOutgoing <- payload:
+		case c.relOutgoing <- cpy:
 		default:
 			return errors.New("outgoing queue full")
 		}
 	} else {
 		select {
-		case c.unrelOutgoing <- payload:
+		case c.unrelOutgoing <- cpy:
 		default:
 		}
 	}
