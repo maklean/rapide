@@ -280,10 +280,13 @@ func (c *connection) handleTick(t time.Time) {
 			continue
 		}
 
-		if up.retries > uint8(config.MaxRetransmissionRetries) {
+		if up.retries >= uint8(config.MaxRetransmissionRetries) {
 			// connection is considered dead once we've passed the max number of retries
 			log.Printf("MaxRetransmissionsRetries passed for 'sn = %d', closing connection with peer...", sn)
 
+			c.closedOnce.Do(func() {
+				close(c.closed)
+			})
 			return
 		}
 
