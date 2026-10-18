@@ -89,10 +89,10 @@ func (c *connection) Close() error {
 	}
 
 	c.closedOnce.Do(func() {
-		// send signal to close channel then wait for finished signal to come
 		close(c.closed)
-		<-c.finished
 	})
+
+	<-c.finished
 
 	return nil
 }
