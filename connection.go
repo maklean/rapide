@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/maklean/rapide/internal/config"
+	"github.com/maklean/rapide/internal/retransmission"
 	"github.com/maklean/rapide/internal/sequence"
 	"github.com/maklean/rapide/internal/writer"
 )
@@ -42,6 +43,9 @@ type connection struct {
 
 	// outgoing unreliable payloads channel for connection
 	unrelOutgoing chan []byte
+
+	// retransmission timer for connection
+	retransmissionTimer retransmission.RetransmissionTimer
 
 	// signal for closing connection
 	closed chan struct{}
@@ -100,19 +104,20 @@ func (c *connection) Close() error {
 // newConnection creates a new connection struct instance whose connected to the given peer address.
 func newConnection(connectionID uint32, socket *net.UDPConn, writer writer.PacketWriter, onClose func()) *connection {
 	conn := &connection{
-		connectionID:  connectionID,
-		socket:        socket,
-		writer:        writer,
-		onClose:       onClose,
-		reliableSp:    sequence.NewSequencePack(),
-		unreliableSp:  sequence.NewSequencePack(),
-		unacked:       make(map[uint16]*unackedPacket),
-		pending:       make(map[uint16]*Packet),
-		incoming:      make(chan *Packet, config.MaxIncomingPackets),
-		relOutgoing:   make(chan []byte, config.MaxOutgoingPackets),
-		unrelOutgoing: make(chan []byte, config.MaxIncomingPackets),
-		closed:        make(chan struct{}),
-		finished:      make(chan struct{}),
+		connectionID:        connectionID,
+		socket:              socket,
+		writer:              writer,
+		onClose:             onClose,
+		reliableSp:          sequence.NewSequencePack(),
+		unreliableSp:        sequence.NewSequencePack(),
+		unacked:             make(map[uint16]*unackedPacket),
+		pending:             make(map[uint16]*Packet),
+		incoming:            make(chan *Packet, config.MaxIncomingPackets),
+		relOutgoing:         make(chan []byte, config.MaxOutgoingPackets),
+		unrelOutgoing:       make(chan []byte, config.MaxIncomingPackets),
+		retransmissionTimer: retransmission.RetransmissionTimerInit(),
+		closed:              make(chan struct{}),
+		finished:            make(chan struct{}),
 	}
 
 	// connection loop - handles incoming packets for connection
@@ -174,6 +179,16 @@ func (c *connection) handleReliableIncoming(p *Packet) {
 	if p.IsAck {
 		// NOTE: this should handle duplicate ACKs because it no-ops on non-existent keys
 		log.Printf("server acknowledged %d, deleting...", p.AckSequenceNumber)
+
+		/*
+			assuming this is how Karn's algo works, we should
+			only take RTT samples that WEREN'T retransmitted.
+		*/
+		if c.unacked[p.AckSequenceNumber].retries == 0 {
+			rtt := float64(time.Since(c.unacked[p.AckSequenceNumber].sentAt).Milliseconds())
+			c.retransmissionTimer.DoMeasurement(rtt)
+		}
+
 		delete(c.unacked, p.AckSequenceNumber)
 		return
 	}
@@ -208,6 +223,7 @@ func (c *connection) handleReliableIncoming(p *Packet) {
 		}
 
 		delete(c.pending, c.reliableSp.NextIn.Value)
+
 		c.reliableSp.NextIn = c.reliableSp.NextIn.Next()
 		log.Printf("Got: %s", string(pending.Payload))
 	}
@@ -280,7 +296,7 @@ func (c *connection) handleOutgoing(payload []byte, reliable bool) {
 func (c *connection) handleTick(t time.Time) {
 	// check for retransmission of unacked packets
 	for sn, up := range c.unacked {
-		if t.Sub(up.sentAt).Seconds() < float64(config.ReliablePacketTimeout) {
+		if t.Sub(up.sentAt).Seconds() < c.retransmissionTimer.RTO {
 			continue
 		}
 
@@ -299,6 +315,9 @@ func (c *connection) handleTick(t time.Time) {
 			log.Printf("retransmitted packet (sn = %d) because it went unacknowledged.", sn)
 			up.sentAt = time.Now()
 			up.retries += 1
+
+			// double RTO if the packet timed out
+			c.retransmissionTimer.RTO *= 2
 		}
 	}
 }

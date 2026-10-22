@@ -26,8 +26,12 @@ const HandshakeRequestResend int = 750
 // ReceiveWindowLength is the maximum number of receive packets that can come in at a time
 const ReceiveWindowLength int = 128
 
-// ConnectionTick is the interval (in milliseconds) between each connection tick.
-const ConnectionTick int = 500
+/*
+ConnectionTick is the interval (in milliseconds) between each connection tick.
+
+Value recommended (section 4): https://www.rfc-editor.org/info/rfc6298/
+*/
+const ConnectionTick int = 100
 
 // ReliablePacketTimeout is the maximum amount of time (in seconds) a packet can go unacknowledged.
 const ReliablePacketTimeout int = 3

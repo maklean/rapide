@@ -26,7 +26,7 @@ func main() {
 			log.Fatalf("Failed to send message to server: %v", err)
 		}
 	}
-
 	log.Println("Sent messages to server.")
-	conn.Close()
+
+	select {}
 }
