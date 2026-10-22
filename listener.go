@@ -6,6 +6,7 @@ import (
 	"math/rand/v2"
 	"net"
 	"sync"
+	"syscall"
 
 	"github.com/maklean/rapide/internal/config"
 	"github.com/maklean/rapide/internal/writer"
@@ -20,6 +21,9 @@ type Listener struct {
 
 	// addr => connection instances that are connected to this Listener
 	peers map[uint32]*connection
+
+	// peers that have fully established a handshake with this Listener
+	acceptedPeers chan *Connection
 }
 
 // newListener creates a new Listener struct instance.
@@ -34,7 +38,11 @@ func newListener(address string) (*Listener, error) {
 		return nil, err
 	}
 
-	return &Listener{socket: socket, peers: make(map[uint32]*connection)}, nil
+	return &Listener{
+		socket:        socket,
+		peers:         make(map[uint32]*connection),
+		acceptedPeers: make(chan *Connection, syscall.SOMAXCONN),
+	}, nil
 }
 
 // Listen creates a socket that starts listening at the given address.
@@ -47,6 +55,11 @@ func Listen(address string) (*Listener, error) {
 	go listener.listenerReadLoop()
 
 	return listener, nil
+}
+
+// Accept blocks until an accepted client is created and added to the Listener's peers map.
+func (l *Listener) Accept() *Connection {
+	return <-l.acceptedPeers
 }
 
 // listenerReadLoop is the Listener's read loop - it accepts datagrams, maps them to an existing connection (or creates one), and sends a packet into the connection's incoming packet channel.
@@ -144,6 +157,9 @@ func (l *Listener) performHandshake(addr *net.UDPAddr) error {
 	}
 
 	log.Printf("Sent handshake response to '%s'... ConnectionID = %d", addr.String(), conn.connectionID)
+
+	// add to accepted channel
+	l.acceptedPeers <- &Connection{conn: conn}
 
 	return nil
 }
