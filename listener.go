@@ -62,6 +62,11 @@ func (l *Listener) Accept() *Connection {
 	return <-l.acceptedPeers
 }
 
+// Addr returns the local network address the Listener is bound to.
+func (l *Listener) Addr() net.Addr {
+	return l.socket.LocalAddr()
+}
+
 // listenerReadLoop is the Listener's read loop - it accepts datagrams, maps them to an existing connection (or creates one), and sends a packet into the connection's incoming packet channel.
 func (l *Listener) listenerReadLoop() {
 	buf := make([]byte, config.MaxPayloadSize)
