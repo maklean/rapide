@@ -3,7 +3,6 @@ package rapide
 import (
 	"errors"
 	"log"
-	"math/rand/v2"
 	"net"
 	"sync"
 	"time"
@@ -95,6 +94,11 @@ func (c *connection) Send(payload []byte, reliable bool) error {
 	return nil
 }
 
+// wow, this is getting dumb.
+func (c *Connection) Send(payload []byte, reliable bool) error {
+	return c.conn.Send(payload, reliable)
+}
+
 // Recv blocks until an incoming packet is received by the connection. It puts the payload data in the given buffer
 // and returns the number of bytes copied into the given buffer.
 func (c *Connection) Read(buf []byte) (int, error) {
@@ -124,6 +128,10 @@ func (c *connection) Close() error {
 	<-c.finished
 
 	return nil
+}
+
+func (c *Connection) Close() error {
+	return c.conn.Close()
 }
 
 // newConnection creates a new connection struct instance whose connected to the given peer address.
@@ -162,9 +170,10 @@ func (c *connection) deliver(p *Packet) {
 
 // run is the client's read loop
 func (c *connection) run() {
-	defer close(c.finished)
-
 	ticker := time.NewTicker(time.Duration(config.ConnectionTick) * time.Millisecond)
+
+	defer close(c.finished)
+	defer ticker.Stop()
 
 	for {
 		select {
@@ -181,21 +190,10 @@ func (c *connection) run() {
 		case t := <-ticker.C:
 			c.handleTick(t)
 		case <-c.closed:
-			// end ticker, flush (only) reliable outgoing channel, run close closure, send finished signal by exiting
-			ticker.Stop()
-
-			for {
-				select {
-				case payload := <-c.relOutgoing:
-					c.handleOutgoing(payload, true)
-				default:
-					if c.onClose != nil {
-						c.onClose()
-					}
-
-					return
-				}
+			if c.onClose != nil {
+				c.onClose()
 			}
+			return
 		}
 	}
 }
@@ -235,11 +233,6 @@ func (c *connection) handleReliableIncoming(p *Packet) {
 	}
 
 	if len(c.incomingRead) == cap(c.incomingRead) && dist == 0 {
-		return
-	}
-
-	if rand.IntN(100) <= 50 {
-		log.Println("DROPPING.")
 		return
 	}
 

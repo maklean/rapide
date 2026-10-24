@@ -2,14 +2,12 @@ package main
 
 import (
 	"log"
-	"sync"
+	"time"
 
 	"github.com/maklean/rapide"
 )
 
 func main() {
-	var wg sync.WaitGroup
-
 	listener, err := rapide.Listen("localhost:3000")
 	if err != nil {
 		log.Fatalf("Failed to start listening on 'localhost:3000': %v", err)
@@ -25,18 +23,15 @@ func main() {
 		}
 
 		log.Println("ACCEPTED CLIENT")
-		wg.Add(1)
-		go handleConnection(conn, &wg)
+		go handleConnection(conn)
 	}
 
-	wg.Wait()
+	time.Sleep(5 * time.Second)
 	listener.Close()
 	log.Println("closed listener")
 }
 
-func handleConnection(conn *rapide.Connection, wg *sync.WaitGroup) {
-	defer wg.Done()
-
+func handleConnection(conn *rapide.Connection) {
 	buf := make([]byte, 1024)
 
 	n, err := conn.Read(buf)
@@ -46,4 +41,9 @@ func handleConnection(conn *rapide.Connection, wg *sync.WaitGroup) {
 	}
 
 	log.Printf("Got buffer from client: %s", string(buf[:n]))
+
+	err = conn.Send(buf[:n], true)
+	if err != nil {
+		log.Fatalf("failed to send buffer to connection")
+	}
 }
