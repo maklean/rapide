@@ -22,7 +22,7 @@ func newUDPClient(address string) (*net.UDPConn, error) {
 }
 
 // Dial connects to the address at the given address
-func Dial(address string) (*connection, error) {
+func Dial(address string) (*Connection, error) {
 	socket, err := newUDPClient(address)
 	if err != nil {
 		return nil, err
@@ -31,6 +31,7 @@ func Dial(address string) (*connection, error) {
 	log.Println("Sent handshake request to server...")
 	connectionID, err := sendHandshakeRequest(socket)
 	if err != nil {
+		socket.Close()
 		return nil, err
 	}
 
@@ -40,7 +41,7 @@ func Dial(address string) (*connection, error) {
 
 	go clientReadLoop(conn)
 
-	return conn, nil
+	return &Connection{conn: conn, remoteAddr: socket.RemoteAddr()}, nil
 }
 
 // sendHandshakeRequest sends a handshake request to the peer/Listener, returns the connectionId if successful.
