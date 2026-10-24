@@ -235,7 +235,7 @@ func (l *Listener) performHandshake(addr *net.UDPAddr) error {
 
 	// add to accepted channel
 	select {
-	case l.acceptedPeers <- &Connection{conn: conn}:
+	case l.acceptedPeers <- &Connection{conn: conn, remoteAddr: addr}:
 	case <-l.closed:
 		removePeer()
 		conn.Close()

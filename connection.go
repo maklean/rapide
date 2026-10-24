@@ -15,7 +15,8 @@ import (
 
 // Public wrapper around connection
 type Connection struct {
-	conn *connection
+	conn       *connection
+	remoteAddr net.Addr
 }
 
 type connection struct {
@@ -97,6 +98,14 @@ func (c *connection) Send(payload []byte, reliable bool) error {
 // wow, this is getting dumb.
 func (c *Connection) Send(payload []byte, reliable bool) error {
 	return c.conn.Send(payload, reliable)
+}
+
+func (c *Connection) LocalAddr() net.Addr {
+	return c.conn.socket.LocalAddr()
+}
+
+func (c *Connection) RemoteAddr() net.Addr {
+	return c.RemoteAddr()
 }
 
 // Recv blocks until an incoming packet is received by the connection. It puts the payload data in the given buffer

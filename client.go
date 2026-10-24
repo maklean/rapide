@@ -31,6 +31,7 @@ func Dial(address string) (*Connection, error) {
 	log.Println("Sent handshake request to server...")
 	connectionID, err := sendHandshakeRequest(socket)
 	if err != nil {
+		socket.Close()
 		return nil, err
 	}
 
@@ -40,7 +41,7 @@ func Dial(address string) (*Connection, error) {
 
 	go clientReadLoop(conn)
 
-	return &Connection{conn: conn}, nil
+	return &Connection{conn: conn, remoteAddr: socket.RemoteAddr()}, nil
 }
 
 // sendHandshakeRequest sends a handshake request to the peer/Listener, returns the connectionId if successful.
