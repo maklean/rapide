@@ -4,36 +4,39 @@ import (
 	"fmt"
 	"log"
 	"math/rand/v2"
+	"sync"
+	"time"
 
 	"github.com/maklean/rapide"
 )
 
 func main() {
-	for range 10 {
-		go connectToListener(rand.IntN(1000000))
+	var wg sync.WaitGroup
+
+	for range 2 {
+		wg.Add(1)
+		go connectToListener(rand.IntN(1000000), &wg)
 	}
 
-	select {}
+	wg.Wait()
 }
 
-func connectToListener(startNum int) {
+func connectToListener(startNum int, wg *sync.WaitGroup) {
+	defer wg.Done()
+
 	conn, err := rapide.Dial("localhost:3000")
 	if err != nil {
-		log.Fatalf("Failed to connect to 'localhost:3000': %v", err)
+		return
 	}
 
-	for i := range 10 {
-		err = conn.Send(fmt.Appendf(nil, "RELIABLE MESSAGE %d", startNum+i), true)
-		if err != nil {
-			log.Fatalf("Failed to send message to server: %v", err)
-		}
+	defer conn.Close()
+
+	err = conn.Send(fmt.Appendf(nil, "RELIABLE MESSAGE %d", startNum), true)
+	if err != nil {
+		return
 	}
 
-	for i := range 10 {
-		err = conn.Send(fmt.Appendf(nil, "UNRELIABLE MESSAGE %d", startNum+i), false)
-		if err != nil {
-			log.Fatalf("Failed to send message to server: %v", err)
-		}
-	}
+	time.Sleep(10 * time.Second)
+
 	log.Println("Sent messages to server.")
 }

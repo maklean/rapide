@@ -24,6 +24,18 @@ type Listener struct {
 
 	// peers that have fully established a handshake with this Listener
 	acceptedPeers chan *Connection
+
+	// signal for closing listener
+	closed chan struct{}
+
+	// needed for a thread-safe connection termination
+	closedOnce sync.Once
+
+	// signal for when we're finished closing/running the listener's loop
+	finished chan struct{}
+
+	// exited read loop?
+	readLoopDone chan struct{}
 }
 
 // newListener creates a new Listener struct instance.
@@ -38,11 +50,16 @@ func newListener(address string) (*Listener, error) {
 		return nil, err
 	}
 
-	return &Listener{
+	listener := &Listener{
 		socket:        socket,
 		peers:         make(map[uint32]*connection),
 		acceptedPeers: make(chan *Connection, syscall.SOMAXCONN),
-	}, nil
+		closed:        make(chan struct{}),
+		finished:      make(chan struct{}),
+		readLoopDone:  make(chan struct{}),
+	}
+
+	return listener, nil
 }
 
 // Listen creates a socket that starts listening at the given address.
@@ -54,12 +71,57 @@ func Listen(address string) (*Listener, error) {
 
 	go listener.listenerReadLoop()
 
+	go func() {
+		defer close(listener.finished)
+
+		<-listener.closed
+
+		listener.socket.Close()
+
+		<-listener.readLoopDone
+
+		listener.peersMu.Lock()
+		peers := make([]*connection, 0, len(listener.peers))
+		for _, c := range listener.peers {
+			peers = append(peers, c)
+		}
+		listener.peersMu.Unlock()
+
+		for _, peer := range peers {
+			peer.Close()
+		}
+	}()
+
 	return listener, nil
 }
 
+// Close closes the Listener.
+func (l *Listener) Close() error {
+	if l.isClosed() {
+		return errors.New("listener is closed")
+	}
+
+	l.closedOnce.Do(func() {
+		close(l.closed)
+	})
+
+	<-l.finished
+
+	return nil
+}
+
 // Accept blocks until an accepted client is created and added to the Listener's peers map.
-func (l *Listener) Accept() *Connection {
-	return <-l.acceptedPeers
+func (l *Listener) Accept() (*Connection, error) {
+	if l.isClosed() {
+		return nil, errors.New("listener is closed")
+	}
+
+	select {
+	case peer := <-l.acceptedPeers:
+		return peer, nil
+	case <-l.closed:
+		return nil, errors.New("listener is closed")
+	}
 }
 
 // Addr returns the local network address the Listener is bound to.
@@ -69,13 +131,15 @@ func (l *Listener) Addr() net.Addr {
 
 // listenerReadLoop is the Listener's read loop - it accepts datagrams, maps them to an existing connection (or creates one), and sends a packet into the connection's incoming packet channel.
 func (l *Listener) listenerReadLoop() {
+	defer close(l.readLoopDone)
+
 	buf := make([]byte, config.MaxPayloadSize)
 
 	for {
 		n, addr, err := l.socket.ReadFromUDP(buf)
 		if err != nil {
 			// if the Listener socket is closed, exit.
-			if errors.Is(err, net.ErrClosed) {
+			if errors.Is(err, net.ErrClosed) || l.isClosed() {
 				return
 			}
 
@@ -133,6 +197,10 @@ func (l *Listener) generateConnectionID() uint32 {
 
 // performHandshake creates a new peer entry for the given connection, and sends a handshake packet to them.
 func (l *Listener) performHandshake(addr *net.UDPAddr) error {
+	if len(l.acceptedPeers) == cap(l.acceptedPeers) {
+		return errors.New("backlog full, dropping handshake")
+	}
+
 	connID := l.generateConnectionID()
 
 	// removes the peer from the peers map
@@ -153,18 +221,36 @@ func (l *Listener) performHandshake(addr *net.UDPAddr) error {
 	data, err := handshakePacket.ToBytes()
 	if err != nil {
 		removePeer()
+		conn.Close()
 		return err
 	}
 
 	if err := conn.writer.Write(data); err != nil {
 		removePeer()
+		conn.Close()
 		return err
 	}
 
 	log.Printf("Sent handshake response to '%s'... ConnectionID = %d", addr.String(), conn.connectionID)
 
 	// add to accepted channel
-	l.acceptedPeers <- &Connection{conn: conn}
+	select {
+	case l.acceptedPeers <- &Connection{conn: conn}:
+	case <-l.closed:
+		removePeer()
+		conn.Close()
+		return errors.New("listener is closed")
+	}
 
 	return nil
+}
+
+// isClosed returns whether the Listener's connection is closed.
+func (l *Listener) isClosed() bool {
+	select {
+	case <-l.closed:
+		return true
+	default:
+		return false
+	}
 }

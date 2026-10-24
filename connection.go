@@ -3,6 +3,7 @@ package rapide
 import (
 	"errors"
 	"log"
+	"math/rand/v2"
 	"net"
 	"sync"
 	"time"
@@ -101,10 +102,13 @@ func (c *Connection) Read(buf []byte) (int, error) {
 		return 0, errors.New("connection is closed")
 	}
 
-	payload := <-c.conn.incomingRead
-	n := copy(buf, payload)
-
-	return n, nil
+	select {
+	case payload := <-c.conn.incomingRead:
+		n := copy(buf, payload)
+		return n, nil
+	case <-c.conn.closed:
+		return 0, errors.New("connection is closed")
+	}
 }
 
 // Close closes the connection with the peer.
@@ -229,13 +233,22 @@ func (c *connection) handleReliableIncoming(p *Packet) {
 		return
 	}
 
+	if len(c.incomingRead) == cap(c.incomingRead) && dist == 0 {
+		return
+	}
+
+	if rand.IntN(100) <= 50 {
+		log.Println("DROPPING.")
+		return
+	}
+
 	c.sendAck(sn)
 
 	c.pending[sn.Value] = p
 	log.Printf("pending on %d", sn.Value)
 
 	// reorder packets that came in
-	for {
+	for len(c.incomingRead) < cap(c.incomingRead) {
 		pending, exists := c.pending[c.reliableSp.NextIn.Value]
 
 		// force correct order
@@ -260,7 +273,9 @@ func (c *connection) handleUnreliableIncoming(p *Packet) {
 	}
 
 	c.unreliableSp.NextIn = sn.Next()
-	c.incomingRead <- p.Payload
+	if len(c.incomingRead) != cap(c.incomingRead) {
+		c.incomingRead <- p.Payload
+	}
 }
 
 // sendAck sends an acknowledgement packet for the given sequence number to the peer
