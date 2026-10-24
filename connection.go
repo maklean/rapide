@@ -203,14 +203,15 @@ func (c *connection) run() {
 // handleIncoming handles the given packet from the peer.
 func (c *connection) handleReliableIncoming(p *Packet) {
 	if p.IsAck {
-		// NOTE: this should handle duplicate ACKs because it no-ops on non-existent keys
 		log.Printf("server acknowledged %d, deleting...", p.AckSequenceNumber)
 
-		/*
-			assuming this is how Karn's algo works, we should
-			only take RTT samples that WEREN'T retransmitted.
-		*/
-		if c.unacked[p.AckSequenceNumber].retries == 0 {
+		up, ok := c.unacked[p.AckSequenceNumber]
+		if !ok {
+			return
+		}
+
+		// Karn's Algorithm states we should only take measurement for packet's that weren't retransmitted
+		if up.retries == 0 {
 			rtt := float64(time.Since(c.unacked[p.AckSequenceNumber].sentAt).Milliseconds())
 			c.retransmissionTimer.DoMeasurement(rtt)
 		}
@@ -331,8 +332,10 @@ func (c *connection) handleOutgoing(payload []byte, reliable bool) {
 // handleTick handles a tick at the given time for the connection.
 func (c *connection) handleTick(t time.Time) {
 	// check for retransmission of unacked packets
+	timedOut := false
+
 	for sn, up := range c.unacked {
-		if t.Sub(up.sentAt).Seconds() < c.retransmissionTimer.RTO {
+		if float64(t.Sub(up.sentAt).Milliseconds()) < c.retransmissionTimer.RTO {
 			continue
 		}
 
@@ -348,13 +351,16 @@ func (c *connection) handleTick(t time.Time) {
 
 		// retransmit packet
 		if err := c.writer.Write(up.packet); err == nil {
-			log.Printf("retransmitted packet (sn = %d) because it went unacknowledged.", sn)
 			up.sentAt = time.Now()
 			up.retries += 1
 
-			// double RTO if the packet timed out
-			c.retransmissionTimer.RTO *= 2
+			timedOut = true
 		}
+	}
+
+	if timedOut {
+		// double RTO if at least one packet timed out
+		c.retransmissionTimer.RTO *= 2
 	}
 }
 
