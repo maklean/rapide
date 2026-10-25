@@ -7,13 +7,14 @@ import (
 )
 
 type UDPConnection struct {
-	socket *net.UDPConn
-	writer PacketWriter
+	socket     *net.UDPConn
+	writer     PacketWriter
+	remoteAddr net.Addr
 }
 
 // NewUDPConnection creates a new UDPConnection struct instance.
-func NewUDPConnection(socket *net.UDPConn, writer PacketWriter) UDPConnection {
-	return UDPConnection{socket, writer}
+func NewUDPConnection(socket *net.UDPConn, writer PacketWriter, remoteAddr net.Addr) UDPConnection {
+	return UDPConnection{socket, writer, remoteAddr}
 }
 
 // Read starts a loop that receives datagrams and sends the decoded packet into the given helper.
@@ -61,4 +62,16 @@ func (uc *UDPConnection) Close() error {
 // Socket returns the socket of this UDPConnection.
 func (uc *UDPConnection) Socket() *net.UDPConn {
 	return uc.socket
+}
+
+// LocalAddr returns the local address of this UDP connection.
+// NOTE: This shouldn't be called on a Listener's UDPConnection.
+func (uc *UDPConnection) LocalAddr() net.Addr {
+	return uc.socket.LocalAddr()
+}
+
+// RemoteAddr returns the peer's address.
+// NOTE: This shouldn't be called on a Listener's UDPConnection.
+func (uc *UDPConnection) RemoteAddr() net.Addr {
+	return uc.remoteAddr
 }

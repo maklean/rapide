@@ -16,7 +16,7 @@ func main() {
 		log.Fatal(err)
 	}
 
-	log.Printf("Started listening at %s...", ServerAddress)
+	log.Printf("Started listening at %s...", listener.Addr().String())
 
 	client, err := listener.Accept(context.Background())
 	if err != nil {

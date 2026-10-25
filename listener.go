@@ -60,6 +60,11 @@ func (l *Listener) Close() error {
 	return nil
 }
 
+// Addr returns the local network address the Listener is bound to.
+func (l *Listener) Addr() net.Addr {
+	return l.conn.LocalAddr()
+}
+
 // close closes the listener with the given error/reason.
 func (l *Listener) close(err error) {
 	l.cancelOnce.Do(func() {
@@ -92,7 +97,7 @@ func newListener(localAddr string) (*Listener, error) {
 	ctx, cancel := context.WithCancelCause(context.Background())
 
 	listener := &Listener{
-		conn:          internal.NewUDPConnection(socket, nil),
+		conn:          internal.NewUDPConnection(socket, nil, nil),
 		peers:         make(map[uint32]*connection),
 		acceptedPeers: make(chan Connection, internal.ListenerClientBacklog),
 		ctx:           ctx,
@@ -160,7 +165,7 @@ func (l *Listener) handleHandshake(addr *net.UDPAddr) error {
 		l.peersMu.Unlock()
 	}
 
-	conn := newConnection(l.ctx, connId, internal.NewUDPConnection(socket, internal.NewListenerWriter(socket, addr)), removePeer)
+	conn := newConnection(l.ctx, connId, internal.NewUDPConnection(socket, internal.NewListenerWriter(socket, addr), addr), removePeer)
 
 	l.peersMu.Lock()
 	l.peers[connId] = conn

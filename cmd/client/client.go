@@ -17,7 +17,7 @@ func main() {
 		log.Fatal(err)
 	}
 
-	log.Println("got connection closing it...")
+	log.Printf("got connection '%s', connected to '%s', closing it...", conn.LocalAddr().String(), conn.RemoteAddr().String())
 	conn.Close()
 	log.Println("closed connection")
 }

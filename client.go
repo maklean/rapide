@@ -29,7 +29,7 @@ func newClient(ctx context.Context, remoteAddr string) (Connection, error) {
 		return nil, err
 	}
 
-	udpConn := internal.NewUDPConnection(socket, internal.NewClientWriter(socket))
+	udpConn := internal.NewUDPConnection(socket, internal.NewClientWriter(socket), addr)
 
 	// TODO: this context should probably be send by the user?
 	conn := newConnection(context.Background(), connId, udpConn, func() { udpConn.Close() })
