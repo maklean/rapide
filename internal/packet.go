@@ -8,6 +8,9 @@ import (
 	"time"
 )
 
+// PacketHeaderSize is the sum of the size of all struct members (excluding Payload)
+const PacketHeaderSize = 4 + 2 + 2 + 1 + 1 + 1 + 1 + 2
+
 type Packet struct {
 	// peer connection ID
 	ConnectionID uint32

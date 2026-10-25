@@ -1,9 +1,9 @@
 package rapide
 
 import (
+	"bytes"
 	"context"
 	"fmt"
-	"math"
 	"net"
 	"sync"
 	"time"
@@ -69,10 +69,12 @@ func (c *connection) Send(data []byte, reliable bool) error {
 		return internal.ErrClientConnectionClosed
 	}
 
-	if len(data) > math.MaxUint16 {
+	if len(data) > internal.MaxPayloadSize {
 		// TODO: idk if I'm supposed to fragment this or something
-		return fmt.Errorf("%w: got payload size of %d (limit is %d)", internal.ErrPayloadTooLarge, len(data), math.MaxUint16)
+		return fmt.Errorf("%w: got payload size of %d (limit is %d)", internal.ErrPayloadTooLarge, len(data), internal.MaxPayloadSize)
 	}
+
+	data = bytes.Clone(data)
 
 	ch := c.unrelOutgoing
 	if reliable {

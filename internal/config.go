@@ -3,6 +3,9 @@ package internal
 // MaxDatagramSize is the maximum size (in bytes) an incoming datagram can be.
 const MaxDatagramSize = 1472
 
+// MaxPayloadSize is the maximum size a datagram's payload can carry.
+const MaxPayloadSize = MaxDatagramSize - PacketHeaderSize
+
 // HandshakeReadInterval is the amount of time (in milliseconds) we wait before reading a handshake packet.
 const HandshakeReadInterval = 500
 
