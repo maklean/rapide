@@ -14,3 +14,4 @@ var ErrIncomingFull error = errors.New("incoming queue full, cannot accept new p
 var ErrOutgoingFull error = errors.New("outgoing queue full, cannot accept new packet")
 var ErrPayloadTooLarge error = errors.New("payload is too large")
 var ErrMaxRetransmissionsExceeded error = errors.New("max retransmissions exceeded")
+var ErrReliableSendFailed error = errors.New("reliable send failed")

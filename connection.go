@@ -195,7 +195,7 @@ func (c *connection) handleIncomingReliable(p *internal.Packet) {
 
 		// Karn's Algorithm states we should only take measurement for packet's that weren't retransmitted
 		if up.Retries == 0 {
-			rtt := float64(time.Since(up.LastSend).Milliseconds())
+			rtt := float64(time.Since(up.LastSend)) / float64(time.Millisecond)
 			c.retransmissionTimer.DoMeasurement(rtt)
 		}
 
@@ -284,6 +284,11 @@ func (c *connection) handleOutgoing(data []byte, reliable bool) {
 	}
 
 	if err := c.udpConnection.Write(p); err != nil {
+		if reliable {
+			// TODO: pretty sure this is wrong, but assume connection's dead.
+			c.close(fmt.Errorf("%w: %v", internal.ErrReliableSendFailed, err))
+			return
+		}
 		return
 	}
 
@@ -325,7 +330,7 @@ func (c *connection) handleRetransmission(t time.Time) {
 	}
 
 	if retransmitted {
-		c.retransmissionTimer.RTO *= 2
+		c.retransmissionTimer.RTO = min(c.retransmissionTimer.RTO*2, internal.MaxRetransmissionTimeout)
 	}
 }
 

@@ -24,3 +24,6 @@ const ConnectionTickInterval = 100
 
 // MaxRetransmissionRetries is the maximum number of times we retransmit a packet before assuming the connection is dead
 const MaxRetransmissionRetries = 3
+
+// MaxRetransmissionTimeout is the maximum retransmission timeout (in milliseconds)
+const MaxRetransmissionTimeout = 60000

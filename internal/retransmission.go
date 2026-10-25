@@ -40,5 +40,6 @@ func (rt *RetransmissionTimer) DoMeasurement(rtt float64) {
 		rt.SRTT = (1-alpha)*rt.SRTT + alpha*rtt
 	}
 
-	rt.RTO = max(1, rt.SRTT+max(float64(ConnectionTickInterval), k*rt.RTTVAR))
+	rt.RTO = max(1000, rt.SRTT+max(float64(ConnectionTickInterval), k*rt.RTTVAR))
+	rt.RTO = min(rt.RTO, MaxRetransmissionTimeout)
 }
