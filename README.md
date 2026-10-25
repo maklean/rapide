@@ -4,7 +4,8 @@ a (WIP) toy reliable UDP network protocol written in Go
 ## Features
 - Basic multi-sending + independent sequencing (reliable & unreliable)
 - Full connection lifecycle:
-    - `Listener.Listen()`
+    - `rapide.Listen()`
+    - `rapide.Dial()`
     - `Listener.Accept()`
     - `Listener.Addr()`
     - `Listener.Close()`
