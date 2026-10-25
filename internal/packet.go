@@ -96,5 +96,5 @@ func (p *Packet) ToBytes() ([]byte, error) {
 
 // Sn returns the Packet's SequenceNumber.
 func (p *Packet) Sn() SequenceNumber {
-	return SequenceNumberInit(p.RawSequenceNumber)
+	return NewSequenceNumber(p.RawSequenceNumber)
 }

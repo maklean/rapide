@@ -21,8 +21,8 @@ type RetransmissionTimer struct {
 	init bool
 }
 
-// RetransmissionTimerInit initalizes a new RetransmissionTimer.
-func RetransmissionTimerInit() (rt RetransmissionTimer) {
+// NewRetransmissionTimer initalizes a new RetransmissionTimer.
+func NewRetransmissionTimer() (rt RetransmissionTimer) {
 	rt.RTO = 1000 // 1 second initial RTO
 	rt.init = true
 	return

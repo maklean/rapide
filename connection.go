@@ -152,7 +152,7 @@ func newConnection(parent context.Context, connectionID uint32, udpConn internal
 		incomingRead:        make(chan []byte, internal.ConnectionIncomingBacklog),
 		relOutgoing:         make(chan []byte, internal.ConnectionOutgoingBacklog),
 		unrelOutgoing:       make(chan []byte, internal.ConnectionOutgoingBacklog),
-		retransmissionTimer: internal.RetransmissionTimerInit(),
+		retransmissionTimer: internal.NewRetransmissionTimer(),
 		ctx:                 ctx,
 		cancel:              cancel,
 		onClose:             onClose,

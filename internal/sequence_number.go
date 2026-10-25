@@ -5,8 +5,8 @@ type SequenceNumber struct {
 	Value uint16
 }
 
-// SequenceNumberInit initializes a SequenceNumber with the given value
-func SequenceNumberInit(value uint16) (sn SequenceNumber) {
+// NewSequenceNumber initializes a SequenceNumber with the given value
+func NewSequenceNumber(value uint16) (sn SequenceNumber) {
 	sn.Value = value
 	return
 }
