@@ -12,10 +12,12 @@ func main() {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*3)
 	defer cancel()
 
-	_, err := rapide.Dial(ctx, "localhost:3000")
+	conn, err := rapide.Dial(ctx, "localhost:3000")
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	select {}
+	log.Println("got connection closing it...")
+	conn.Close()
+	log.Println("closed connection")
 }

@@ -1,23 +1,80 @@
 package rapide
 
 import (
+	"context"
 	"fmt"
+	"maps"
 	"math/rand"
 	"net"
-	"syscall"
+	"sync"
 
 	"github.com/maklean/rapide/internal"
 )
 
 type Listener struct {
-	// UDP connection for listener
+	// wrapper for the listener's socket
 	conn internal.UDPConnection
 
 	// map of connectionID => peer
 	peers map[uint32]*connection
 
+	peersMu sync.Mutex
+
 	// peers that have established a connection (handshake)
 	acceptedPeers chan Connection
+
+	ctx        context.Context
+	cancel     context.CancelCauseFunc
+	cancelOnce sync.Once
+}
+
+// Accept returns a newly connected peer. If a peer is not available immediately, it blocks until one is available.
+func (l *Listener) Accept(ctx context.Context) (Connection, error) {
+	if l.IsClosed() {
+		return nil, internal.ErrListenerConnectionClosed
+	}
+
+	for {
+		select {
+		case peer := <-l.acceptedPeers:
+			if peer.IsClosed() {
+				continue
+			}
+
+			return peer, nil
+		case <-l.ctx.Done():
+			return nil, internal.ErrListenerConnectionClosed
+		case <-ctx.Done():
+			return nil, context.Cause(ctx)
+		}
+	}
+}
+
+// Close closes the listener.
+func (l *Listener) Close() error {
+	if l.IsClosed() {
+		return internal.ErrListenerConnectionClosed
+	}
+
+	l.close(internal.ErrCloseRequest)
+	return nil
+}
+
+// close closes the listener with the given error/reason.
+func (l *Listener) close(err error) {
+	l.cancelOnce.Do(func() {
+		l.cancel(err)
+
+		l.peersMu.Lock()
+		peers := maps.Clone(l.peers)
+		l.peersMu.Unlock()
+
+		for _, peer := range peers {
+			peer.Close()
+		}
+
+		l.conn.Close()
+	})
 }
 
 // newListener creates a new listener listening at the given local address.
@@ -32,13 +89,24 @@ func newListener(localAddr string) (*Listener, error) {
 		return nil, err
 	}
 
+	ctx, cancel := context.WithCancelCause(context.Background())
+
 	listener := &Listener{
 		conn:          internal.NewUDPConnection(socket, nil),
 		peers:         make(map[uint32]*connection),
-		acceptedPeers: make(chan Connection, syscall.SOMAXCONN),
+		acceptedPeers: make(chan Connection, internal.ListenerClientBacklog),
+		ctx:           ctx,
+		cancel:        cancel,
 	}
 
-	go listener.conn.Read(listener.handlePacket)
+	go listener.conn.Read(func(addr *net.UDPAddr, p *internal.Packet) error {
+		select {
+		case <-ctx.Done():
+			return internal.ErrListenerConnectionClosed
+		default:
+			return listener.handlePacket(addr, p)
+		}
+	})
 
 	return listener, nil
 }
@@ -49,7 +117,9 @@ func (l *Listener) handlePacket(addr *net.UDPAddr, p *internal.Packet) error {
 		return l.handleHandshake(addr)
 	}
 
+	l.peersMu.Lock()
 	_, exists := l.peers[p.ConnectionID]
+	l.peersMu.Unlock()
 
 	if !exists {
 		return fmt.Errorf("%w: %d", internal.ErrInvalidConnectionID, p.ConnectionID)
@@ -66,6 +136,9 @@ func (l *Listener) handleHandshake(addr *net.UDPAddr) error {
 
 	// genConnID generates an unused connection ID.
 	genConnID := func() uint32 {
+		l.peersMu.Lock()
+		defer l.peersMu.Unlock()
+
 		connId := rand.Uint32()
 
 		_, exists := l.peers[connId]
@@ -81,25 +154,42 @@ func (l *Listener) handleHandshake(addr *net.UDPAddr) error {
 	socket := l.conn.Socket()
 	connId := genConnID()
 
-	conn := newConnection(connId, internal.NewUDPConnection(socket, internal.NewListenerWriter(socket, addr)))
-	l.peers[connId] = conn
+	removePeer := func() {
+		l.peersMu.Lock()
+		delete(l.peers, connId)
+		l.peersMu.Unlock()
+	}
 
-	// send handshake packet back to client, TODO: close connection on errors
+	conn := newConnection(l.ctx, connId, internal.NewUDPConnection(socket, internal.NewListenerWriter(socket, addr)), removePeer)
+
+	l.peersMu.Lock()
+	l.peers[connId] = conn
+	l.peersMu.Unlock()
+
+	// send handshake packet back to client
 	handshake, err := (&internal.Packet{ConnectionID: connId, IsHandshakeServer: true}).ToBytes()
 	if err != nil {
-		delete(l.peers, connId)
+		conn.Close()
 		return err
 	}
 
 	if err := conn.udpConnection.Write(handshake); err != nil {
-		delete(l.peers, connId)
+		conn.Close()
 		return err
 	}
 
 	select {
 	case l.acceptedPeers <- conn:
 		return nil
+	case <-l.ctx.Done():
+		return internal.ErrListenerConnectionClosed
 	default:
+		conn.Close()
 		return internal.ErrListenerBacklogFull
 	}
+}
+
+// IsClosed returns whether the Listener is closed.
+func (l *Listener) IsClosed() bool {
+	return l.ctx.Err() != nil
 }

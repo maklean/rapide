@@ -29,7 +29,10 @@ func newClient(ctx context.Context, remoteAddr string) (Connection, error) {
 		return nil, err
 	}
 
-	conn := newConnection(connId, internal.NewUDPConnection(socket, internal.NewClientWriter(socket)))
+	udpConn := internal.NewUDPConnection(socket, internal.NewClientWriter(socket))
+
+	// TODO: this context should probably be send by the user?
+	conn := newConnection(context.Background(), connId, udpConn, func() { udpConn.Close() })
 
 	go conn.udpConnection.Read(clientHandlePacket)
 
@@ -94,5 +97,5 @@ func clientSendHandshake(ctx context.Context, socket *net.UDPConn) (uint32, erro
 		return p.ConnectionID, nil
 	}
 
-	return 0, fmt.Errorf("%w: %w", internal.HandshakeTimeout, ctx.Err())
+	return 0, fmt.Errorf("%w: %w", internal.ErrHandshakeTimeout, ctx.Err())
 }

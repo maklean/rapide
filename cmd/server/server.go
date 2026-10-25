@@ -1,7 +1,9 @@
 package main
 
 import (
+	"context"
 	"log"
+	"time"
 
 	"github.com/maklean/rapide"
 )
@@ -9,12 +11,25 @@ import (
 const ServerAddress = "localhost:3000"
 
 func main() {
-	_, err := rapide.Listen(ServerAddress)
+	listener, err := rapide.Listen(ServerAddress)
 	if err != nil {
 		log.Fatal(err)
 	}
 
 	log.Printf("Started listening at %s...", ServerAddress)
 
-	select {}
+	client, err := listener.Accept(context.Background())
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	log.Println("got client, closing it...")
+	err = client.Close()
+	if err != nil {
+		log.Fatal(err)
+	}
+	log.Println("closed client...")
+
+	time.Sleep(5 * time.Second)
+	listener.Close()
 }
