@@ -123,12 +123,14 @@ func (l *Listener) handlePacket(addr *net.UDPAddr, p *internal.Packet) error {
 	}
 
 	l.peersMu.Lock()
-	_, exists := l.peers[p.ConnectionID]
+	conn, exists := l.peers[p.ConnectionID]
 	l.peersMu.Unlock()
 
 	if !exists {
 		return fmt.Errorf("%w: %d", internal.ErrInvalidConnectionID, p.ConnectionID)
 	}
+
+	conn.deliver(p)
 
 	return nil
 }

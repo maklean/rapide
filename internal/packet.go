@@ -5,17 +5,30 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
+	"time"
 )
 
 type Packet struct {
-	// the peer connection ID for this packet
+	// peer connection ID
 	ConnectionID uint32
+
+	// sequence number
+	RawSequenceNumber uint16
+
+	// sequence number being acknowledged
+	AckSequenceNumber uint16
 
 	// whether this is a handshake packet sent by the client or not
 	IsHandshakeClient bool
 
 	// whether this is a handshake packet sent by the server of not
 	IsHandshakeServer bool
+
+	// whether this packet is reliable or not
+	IsReliable bool
+
+	// whether this packet is an acknowledgement packet or not
+	IsAck bool
 
 	// size of data being sent
 	PayloadSize uint16
@@ -24,13 +37,24 @@ type Packet struct {
 	Payload []byte
 }
 
+type UnackedPacket struct {
+	// serialized packet
+	Packet []byte
+
+	// most recent send
+	LastSend time.Time
+
+	// number of times we've tried retransmitting
+	Retries uint8
+}
+
 // FromBytes parses bytes into a packet.
 func FromBytes(data []byte) (*Packet, error) {
 	p := &Packet{}
 
 	reader := bytes.NewReader(data)
 
-	for _, field := range []any{&p.ConnectionID, &p.IsHandshakeClient, &p.IsHandshakeServer, &p.PayloadSize} {
+	for _, field := range []any{&p.ConnectionID, &p.RawSequenceNumber, &p.AckSequenceNumber, &p.IsHandshakeClient, &p.IsHandshakeServer, &p.IsReliable, &p.IsAck, &p.PayloadSize} {
 		if err := binary.Read(reader, binary.BigEndian, field); err != nil {
 			return nil, err
 		}
@@ -56,7 +80,7 @@ func (p *Packet) ToBytes() ([]byte, error) {
 
 	buf := new(bytes.Buffer)
 
-	for _, field := range []any{p.ConnectionID, p.IsHandshakeClient, p.IsHandshakeServer, p.PayloadSize} {
+	for _, field := range []any{p.ConnectionID, p.RawSequenceNumber, p.AckSequenceNumber, p.IsHandshakeClient, p.IsHandshakeServer, p.IsReliable, p.IsAck, p.PayloadSize} {
 		if err := binary.Write(buf, binary.BigEndian, field); err != nil {
 			return nil, err
 		}
@@ -65,4 +89,9 @@ func (p *Packet) ToBytes() ([]byte, error) {
 	buf.Write(p.Payload)
 
 	return buf.Bytes(), nil
+}
+
+// Sn returns the Packet's SequenceNumber.
+func (p *Packet) Sn() SequenceNumber {
+	return SequenceNumberInit(p.RawSequenceNumber)
 }

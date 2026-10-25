@@ -34,14 +34,11 @@ func newClient(ctx context.Context, remoteAddr string) (Connection, error) {
 	// TODO: this context should probably be send by the user?
 	conn := newConnection(context.Background(), connId, udpConn, func() { udpConn.Close() })
 
-	go conn.udpConnection.Read(clientHandlePacket)
+	go conn.udpConnection.Read(func(_ *net.UDPAddr, p *internal.Packet) error {
+		return conn.deliver(p)
+	})
 
 	return conn, nil
-}
-
-// clientHandlePacket handles an incoming packet sent by the listener.
-func clientHandlePacket(_ *net.UDPAddr, p *internal.Packet) error {
-	return nil
 }
 
 // clientSendHandshake sends a handshake request to the listener. Returns the connection ID if connected.

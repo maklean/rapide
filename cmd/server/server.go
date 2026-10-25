@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"log"
-	"time"
 
 	"github.com/maklean/rapide"
 )
@@ -23,13 +22,23 @@ func main() {
 		log.Fatal(err)
 	}
 
-	log.Println("got client, closing it...")
-	err = client.Close()
+	log.Printf("Accepted client: %s", client.RemoteAddr().String())
+
+	err = client.Send([]byte("Hello, client!"), true)
 	if err != nil {
 		log.Fatal(err)
 	}
-	log.Println("closed client...")
 
-	time.Sleep(5 * time.Second)
-	listener.Close()
+	log.Println("Sent message to client.")
+
+	buf := make([]byte, 1024)
+
+	n, err := client.Read(buf)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	log.Printf("Received data from client: %s", string(buf[:n]))
+
+	select {}
 }
