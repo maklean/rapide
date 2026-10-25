@@ -2,7 +2,7 @@
 a (WIP) toy reliable UDP network protocol written in Go
 
 ## Features
-- Basic multi-sending + independent sequencing (reliable & unreliable)
+- [Multi-sending + independent sequencing](https://io7m.com/documents/udp-reliable/#ack-multi-sending-independent-sequence:~:text=independent%20sequencing.-,1.4.4%20ACK%20(Multi%20sending%2C%20independent%20sequence),-By%20once%20again) (reliable & unreliable)
 - Full connection lifecycle:
     - `rapide.Listen()`
     - `rapide.Dial()`
