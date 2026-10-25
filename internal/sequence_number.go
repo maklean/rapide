@@ -1,11 +1,12 @@
-package sequence
+package internal
 
+// Sequence number following serial number arithmetic (RFC 1982)
 type SequenceNumber struct {
 	Value uint16
 }
 
-// snFromValue creates a sequenceNumber struct object from a given value.
-func SnFromValue(value uint16) (sn SequenceNumber) {
+// SequenceNumberInit initializes a SequenceNumber with the given value
+func SequenceNumberInit(value uint16) (sn SequenceNumber) {
 	sn.Value = value
 	return
 }
@@ -17,7 +18,7 @@ func (sn SequenceNumber) Next() (snN SequenceNumber) {
 }
 
 // Le returns whether the current sequence number is less than the given one.
-func (sn SequenceNumber) Le(other SequenceNumber) bool {
+func (sn SequenceNumber) Lt(other SequenceNumber) bool {
 	return sn.Distance(other) < 0
 }
 

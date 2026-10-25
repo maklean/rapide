@@ -1,225 +1,203 @@
 package rapide
 
 import (
-	"errors"
-	"log"
+	"bytes"
+	"context"
+	"fmt"
 	"net"
 	"sync"
 	"time"
 
-	"github.com/maklean/rapide/internal/config"
-	"github.com/maklean/rapide/internal/retransmission"
-	"github.com/maklean/rapide/internal/sequence"
-	"github.com/maklean/rapide/internal/writer"
+	"github.com/maklean/rapide/internal"
 )
 
-// Public wrapper around connection
-type Connection struct {
-	conn       *connection
-	remoteAddr net.Addr
+type Connection interface {
+	Send([]byte, bool) error
+	Read([]byte) (int, error)
+	RemoteAddr() net.Addr
+	LocalAddr() net.Addr
+	Close() error
+	IsClosed() bool
 }
 
 type connection struct {
-	// identifier for this connection
+	// connection identifier
 	connectionID uint32
 
-	// socket for this connection
-	socket *net.UDPConn
-
-	// packet writer for this connection
-	writer writer.PacketWriter
+	// udp connection to peer
+	udpConnection internal.UDPConnection
 
 	// reliable sequence numbers
-	reliableSp sequence.SequencePack
+	reliableSeq internal.Sequence
 
 	// unreliable sequence numbers
-	unreliableSp sequence.SequencePack
+	unreliableSeq internal.Sequence
 
-	// map of reliable packets waiting to be acknowledged
-	unacked map[uint16]*unackedPacket
+	// map of sequence number => unacknowledged reliable packet
+	unacked map[uint16]*internal.UnackedPacket
 
-	// map of reliable packets that have arrived
-	pending map[uint16]*Packet
+	// map of sequence number => packet that has arrived
+	pending map[uint16]*internal.Packet
 
-	// incoming packets channel for connection
-	incoming chan *Packet
+	// incoming reliable packets
+	relIncoming chan *internal.Packet
 
-	// incoming packets channel to be sent in connection.Read()
+	// incoming unreliable packets
+	unrelIncoming chan *internal.Packet
+
+	// incoming packets (for user API / Connection.Read())
 	incomingRead chan []byte
 
-	// outgoing reliable payloads channel for connection
+	// outgoing reliable payloads
 	relOutgoing chan []byte
 
-	// outgoing unreliable payloads channel for connection
+	// outgoing unreliable payloads
 	unrelOutgoing chan []byte
 
-	// retransmission timer for connection
-	retransmissionTimer retransmission.RetransmissionTimer
+	// retransmission timer
+	retransmissionTimer internal.RetransmissionTimer
 
-	// signal for closing connection
-	closed chan struct{}
-
-	// needed for a thread-safe connection termination
-	closedOnce sync.Once
-
-	// closure called as the connection's about to close (listener/server = rmv. from peers map, client = close socket)
-	onClose func()
-
-	// signal for when we're finished closing/running the connection's loop
-	finished chan struct{}
+	ctx        context.Context
+	cancel     context.CancelCauseFunc
+	cancelOnce sync.Once
+	onClose    func()
 }
 
-// Send sends a byte payload to the peer address of this connection
-func (c *connection) Send(payload []byte, reliable bool) error {
-	if c.isClosed() {
-		return errors.New("connection is closed")
+// Send sends the given payload to the connection's peer.
+func (c *connection) Send(data []byte, reliable bool) error {
+	if c.IsClosed() {
+		return internal.ErrClientConnectionClosed
 	}
 
-	// sender could reuse payload later
-	cpy := make([]byte, len(payload))
-	copy(cpy, payload)
+	if len(data) > internal.MaxPayloadSize {
+		// TODO: idk if I'm supposed to fragment this or something
+		return fmt.Errorf("%w: got payload size of %d (limit is %d)", internal.ErrPayloadTooLarge, len(data), internal.MaxPayloadSize)
+	}
 
+	data = bytes.Clone(data)
+
+	ch := c.unrelOutgoing
 	if reliable {
+		ch = c.relOutgoing
+	}
+
+	for {
 		select {
-		case c.relOutgoing <- cpy:
+		case ch <- data:
+			return nil
+		case <-c.ctx.Done():
+			return internal.ErrClientConnectionClosed
 		default:
-			return errors.New("outgoing queue full")
+			return internal.ErrOutgoingFull
 		}
-	} else {
+	}
+}
+
+// Read reads incoming data received from the peer. If data is not immediately available, Read blocks.
+// The incoming data is put into the given buffer and the number of bytes written into the buffer is returned.
+func (c *connection) Read(buf []byte) (int, error) {
+	if c.IsClosed() {
+		return 0, internal.ErrClientConnectionClosed
+	}
+
+	for {
 		select {
-		case c.unrelOutgoing <- cpy:
-		default:
+		case data := <-c.incomingRead:
+			n := copy(buf, data)
+			return n, nil
+		case <-c.ctx.Done():
+			return 0, internal.ErrClientConnectionClosed
 		}
 	}
-
-	return nil
 }
 
-// wow, this is getting dumb.
-func (c *Connection) Send(payload []byte, reliable bool) error {
-	return c.conn.Send(payload, reliable)
+// LocalAddr returns the local address this connection is bound to.
+func (c *connection) LocalAddr() net.Addr {
+	return c.udpConnection.LocalAddr()
 }
 
-func (c *Connection) LocalAddr() net.Addr {
-	return c.conn.socket.LocalAddr()
+// RemoteAddr returns the peer's address.
+func (c *connection) RemoteAddr() net.Addr {
+	return c.udpConnection.RemoteAddr()
 }
 
-func (c *Connection) RemoteAddr() net.Addr {
-	return c.RemoteAddr()
-}
-
-// Recv blocks until an incoming packet is received by the connection. It puts the payload data in the given buffer
-// and returns the number of bytes copied into the given buffer.
-func (c *Connection) Read(buf []byte) (int, error) {
-	if c.conn.isClosed() {
-		return 0, errors.New("connection is closed")
-	}
-
-	select {
-	case payload := <-c.conn.incomingRead:
-		n := copy(buf, payload)
-		return n, nil
-	case <-c.conn.closed:
-		return 0, errors.New("connection is closed")
-	}
-}
-
-// Close closes the connection with the peer.
+// Close closes the connection.
 func (c *connection) Close() error {
-	if c.isClosed() {
-		return errors.New("connection is closed")
+	if c.IsClosed() {
+		return internal.ErrClientConnectionClosed
 	}
 
-	c.closedOnce.Do(func() {
-		close(c.closed)
-	})
-
-	<-c.finished
-
+	c.close(internal.ErrCloseRequest)
 	return nil
 }
 
-func (c *Connection) Close() error {
-	return c.conn.Close()
+// IsClosed returns whether the connection is closed.
+func (c *connection) IsClosed() bool {
+	return c.ctx.Err() != nil
 }
 
-// newConnection creates a new connection struct instance whose connected to the given peer address.
-func newConnection(connectionID uint32, socket *net.UDPConn, writer writer.PacketWriter, onClose func()) *connection {
+// newConnection creates a new connection struct instance.
+func newConnection(parent context.Context, connectionID uint32, udpConn internal.UDPConnection, onClose func()) *connection {
+	ctx, cancel := context.WithCancelCause(parent)
+
 	conn := &connection{
 		connectionID:        connectionID,
-		socket:              socket,
-		writer:              writer,
+		udpConnection:       udpConn,
+		reliableSeq:         internal.NewSequence(),
+		unreliableSeq:       internal.NewSequence(),
+		unacked:             make(map[uint16]*internal.UnackedPacket, internal.ConnectionReceiveWindowSize),
+		pending:             make(map[uint16]*internal.Packet),
+		relIncoming:         make(chan *internal.Packet, internal.ConnectionIncomingBacklog),
+		unrelIncoming:       make(chan *internal.Packet, internal.ConnectionIncomingBacklog),
+		incomingRead:        make(chan []byte, internal.ConnectionIncomingBacklog),
+		relOutgoing:         make(chan []byte, internal.ConnectionOutgoingBacklog),
+		unrelOutgoing:       make(chan []byte, internal.ConnectionOutgoingBacklog),
+		retransmissionTimer: internal.RetransmissionTimerInit(),
+		ctx:                 ctx,
+		cancel:              cancel,
 		onClose:             onClose,
-		reliableSp:          sequence.NewSequencePack(),
-		unreliableSp:        sequence.NewSequencePack(),
-		unacked:             make(map[uint16]*unackedPacket),
-		pending:             make(map[uint16]*Packet),
-		incoming:            make(chan *Packet, config.MaxIncomingPackets),
-		incomingRead:        make(chan []byte, config.MaxIncomingPackets),
-		relOutgoing:         make(chan []byte, config.MaxOutgoingPackets),
-		unrelOutgoing:       make(chan []byte, config.MaxOutgoingPackets),
-		retransmissionTimer: retransmission.RetransmissionTimerInit(),
-		closed:              make(chan struct{}),
-		finished:            make(chan struct{}),
 	}
 
-	// connection loop - handles incoming packets for connection
 	go conn.run()
 
 	return conn
 }
 
-// deliver adds the given packet to the connections incoming packets channel.
-func (c *connection) deliver(p *Packet) {
-	select {
-	case c.incoming <- p:
-	default:
-	}
-}
-
-// run is the client's read loop
 func (c *connection) run() {
-	ticker := time.NewTicker(time.Duration(config.ConnectionTick) * time.Millisecond)
+	ticker := time.NewTicker(internal.ConnectionTickInterval * time.Millisecond)
 
-	defer close(c.finished)
+	defer c.close(context.Cause(c.ctx))
 	defer ticker.Stop()
 
 	for {
 		select {
-		case packet := <-c.incoming:
-			if packet.IsReliable || packet.IsAck {
-				c.handleReliableIncoming(packet)
-			} else {
-				c.handleUnreliableIncoming(packet)
-			}
-		case payload := <-c.relOutgoing:
-			c.handleOutgoing(payload, true)
-		case payload := <-c.unrelOutgoing:
-			c.handleOutgoing(payload, false)
+		case p := <-c.relIncoming:
+			c.handleIncomingReliable(p)
+		case p := <-c.unrelIncoming:
+			c.handleIncomingUnreliable(p)
+		case data := <-c.relOutgoing:
+			c.handleOutgoing(data, true)
+		case data := <-c.unrelOutgoing:
+			c.handleOutgoing(data, false)
 		case t := <-ticker.C:
 			c.handleTick(t)
-		case <-c.closed:
-			if c.onClose != nil {
-				c.onClose()
-			}
+		case <-c.ctx.Done():
 			return
 		}
 	}
 }
 
-// handleIncoming handles the given packet from the peer.
-func (c *connection) handleReliableIncoming(p *Packet) {
+// handleIncomingReliable handles incoming reliable packets.
+func (c *connection) handleIncomingReliable(p *internal.Packet) {
 	if p.IsAck {
-		log.Printf("server acknowledged %d, deleting...", p.AckSequenceNumber)
-
 		up, ok := c.unacked[p.AckSequenceNumber]
 		if !ok {
 			return
 		}
 
 		// Karn's Algorithm states we should only take measurement for packet's that weren't retransmitted
-		if up.retries == 0 {
-			rtt := float64(time.Since(c.unacked[p.AckSequenceNumber].sentAt).Milliseconds())
+		if up.Retries == 0 {
+			rtt := float64(time.Since(up.LastSend)) / float64(time.Millisecond)
 			c.retransmissionTimer.DoMeasurement(rtt)
 		}
 
@@ -227,151 +205,192 @@ func (c *connection) handleReliableIncoming(p *Packet) {
 		return
 	}
 
-	sn := p.GetSn()
-	dist := sn.Distance(c.reliableSp.NextIn)
+	sn := p.Sn()
+
+	dist := sn.Distance(c.reliableSeq.NextIn)
 
 	if dist < 0 {
-		// lost ACK or duplicate packet, either way resend ACK
+		// could be a duplicate packet or caused by a lost ACK
 		c.sendAck(sn)
 		return
 	}
 
-	if dist >= int16(config.ReceiveWindowLength) {
-		// only accept packets in our receive window
+	if dist >= internal.ConnectionReceiveWindowSize {
 		return
 	}
 
 	if len(c.incomingRead) == cap(c.incomingRead) && dist == 0 {
+		// cannot deliver packet immediately b/c channel is full
 		return
 	}
 
 	c.sendAck(sn)
-
 	c.pending[sn.Value] = p
-	log.Printf("pending on %d", sn.Value)
 
-	// reorder packets that came in
+	// reorder packets starting from the current next incoming sequence number, then send into incomingRead
 	for len(c.incomingRead) < cap(c.incomingRead) {
-		pending, exists := c.pending[c.reliableSp.NextIn.Value]
+		p, exists := c.pending[c.reliableSeq.NextIn.Value]
 
-		// force correct order
 		if !exists {
-			log.Printf("%d hasn't arrived yet, break...", c.reliableSp.NextIn.Value)
 			break
 		}
 
-		delete(c.pending, c.reliableSp.NextIn.Value)
-
-		c.reliableSp.NextIn = c.reliableSp.NextIn.Next()
-		c.incomingRead <- pending.Payload
+		select {
+		case c.incomingRead <- p.Payload:
+			delete(c.pending, c.reliableSeq.NextIn.Value)
+			c.reliableSeq.NextIn = c.reliableSeq.NextIn.Next()
+		case <-c.ctx.Done():
+			return
+		default:
+			return
+		}
 	}
 }
 
-func (c *connection) handleUnreliableIncoming(p *Packet) {
-	sn := p.GetSn()
+// handleIncomingUnreliable handles incoming unreliable packets.
+func (c *connection) handleIncomingUnreliable(p *internal.Packet) {
+	sn := p.Sn()
 
-	if c.unreliableSp.NextIn.Gt(sn) {
-		// reject if the next incoming sequence number is greater, reject
+	if sn.Lt(c.unreliableSeq.NextIn) {
 		return
 	}
 
-	c.unreliableSp.NextIn = sn.Next()
-	if len(c.incomingRead) != cap(c.incomingRead) {
-		c.incomingRead <- p.Payload
+	select {
+	case c.incomingRead <- p.Payload:
+		c.unreliableSeq.NextIn = sn.Next()
+	case <-c.ctx.Done():
+		return
+	default:
+		return
 	}
 }
 
-// sendAck sends an acknowledgement packet for the given sequence number to the peer
-func (c *connection) sendAck(sn sequence.SequenceNumber) {
-	ackPacket, err := (&Packet{ConnectionID: c.connectionID, IsAck: true, AckSequenceNumber: sn.Value}).ToBytes()
-	if err != nil {
-		return
-	}
-
-	err = c.writer.Write(ackPacket)
-	if err != nil {
-		return
-	}
-
-	log.Println("Sent ACK packet to peer.")
-}
-
-// handleOutgoing handles sending the given payload to the peer.
-func (c *connection) handleOutgoing(payload []byte, reliable bool) {
-	var sn uint16
+// handleOutgoing handles outgoing data.
+func (c *connection) handleOutgoing(data []byte, reliable bool) {
+	sn := c.unreliableSeq.NextOut
 
 	if reliable {
-		sn = c.reliableSp.NextOut.Value
-	} else {
-		sn = c.unreliableSp.NextOut.Value
+		sn = c.reliableSeq.NextOut
 	}
 
-	packet := Packet{
+	p, err := (&internal.Packet{
 		ConnectionID:      c.connectionID,
-		RawSequenceNumber: sn,
-		PayloadLength:     uint16(len(payload)),
-		Payload:           payload,
+		RawSequenceNumber: sn.Value,
 		IsReliable:        reliable,
-	}
+		PayloadSize:       uint16(len(data)),
+		Payload:           data,
+	}).ToBytes()
 
-	data, err := packet.ToBytes()
 	if err != nil {
 		return
 	}
 
-	if err := c.writer.Write(data); err != nil {
+	if err := c.udpConnection.Write(p); err != nil {
+		if reliable {
+			// TODO: pretty sure this is wrong, but assume connection's dead.
+			c.close(fmt.Errorf("%w: %v", internal.ErrReliableSendFailed, err))
+			return
+		}
 		return
 	}
 
 	if reliable {
-		c.unacked[c.reliableSp.NextOut.Value] = &unackedPacket{packet: data, sentAt: time.Now(), retries: 0}
-		c.reliableSp.NextOut = c.reliableSp.NextOut.Next()
+		c.unacked[sn.Value] = &internal.UnackedPacket{Packet: p, LastSend: time.Now(), Retries: 0}
+		c.reliableSeq.NextOut = sn.Next()
 	} else {
-		c.unreliableSp.NextOut = c.unreliableSp.NextOut.Next()
+		c.unreliableSeq.NextOut = sn.Next()
 	}
 }
 
-// handleTick handles a tick at the given time for the connection.
+// handleTick handles a connection tick at the given time.
 func (c *connection) handleTick(t time.Time) {
-	// check for retransmission of unacked packets
-	timedOut := false
+	c.drainPending()
+	c.handleRetransmission(t)
+}
+
+// handleRetransmission handles unacknowledged packet retransmissions.
+func (c *connection) handleRetransmission(t time.Time) {
+	retransmitted := false
 
 	for sn, up := range c.unacked {
-		if float64(t.Sub(up.sentAt).Milliseconds()) < c.retransmissionTimer.RTO {
+		if float64(t.Sub(up.LastSend).Milliseconds()) < c.retransmissionTimer.RTO {
 			continue
 		}
 
-		if up.retries >= uint8(config.MaxRetransmissionRetries) {
-			// connection is considered dead once we've passed the max number of retries
-			log.Printf("MaxRetransmissionsRetries passed for 'sn = %d', closing connection with peer...", sn)
-
-			c.closedOnce.Do(func() {
-				close(c.closed)
-			})
+		if up.Retries >= internal.MaxRetransmissionRetries {
+			c.close(fmt.Errorf("%w: sn=%d, retries=%d", internal.ErrMaxRetransmissionsExceeded, sn, up.Retries))
 			return
 		}
 
 		// retransmit packet
-		if err := c.writer.Write(up.packet); err == nil {
-			up.sentAt = time.Now()
-			up.retries += 1
+		if err := c.udpConnection.Write(up.Packet); err == nil {
+			up.LastSend = time.Now()
+			up.Retries += 1
 
-			timedOut = true
+			retransmitted = true
 		}
 	}
 
-	if timedOut {
-		// double RTO if at least one packet timed out
-		c.retransmissionTimer.RTO *= 2
+	if retransmitted {
+		c.retransmissionTimer.RTO = min(c.retransmissionTimer.RTO*2, internal.MaxRetransmissionTimeout)
 	}
 }
 
-// isClosed returns whether a connection with a peer was terminated.
-func (c *connection) isClosed() bool {
-	select {
-	case <-c.closed:
-		return true
-	default:
-		return false
+// drainPending attempts to send packets that are left in the connection's pending map (due to the incomingRead channel being full)
+func (c *connection) drainPending() {
+	for {
+		p, exists := c.pending[c.reliableSeq.NextIn.Value]
+
+		if !exists {
+			break
+		}
+
+		select {
+		case c.incomingRead <- p.Payload:
+			delete(c.pending, c.reliableSeq.NextIn.Value)
+			c.reliableSeq.NextIn = c.reliableSeq.NextIn.Next()
+		case <-c.ctx.Done():
+			return
+		default:
+			return
+		}
 	}
+}
+
+// sendAck sends an acknowledgement packet for the given sequence number to the connection's peer.
+func (c *connection) sendAck(ackSn internal.SequenceNumber) {
+	ack, err := (&internal.Packet{ConnectionID: c.connectionID, IsAck: true, AckSequenceNumber: ackSn.Value}).ToBytes()
+	if err != nil {
+		return
+	}
+
+	c.udpConnection.Write(ack)
+}
+
+// deliver adds the given packet to the correct incoming channel.
+func (c *connection) deliver(p *internal.Packet) error {
+	ch := c.unrelIncoming
+	if p.IsReliable || p.IsAck {
+		ch = c.relIncoming
+	}
+
+	select {
+	case <-c.ctx.Done():
+		return internal.ErrClientConnectionClosed
+	case ch <- p:
+		return nil
+	default:
+		return internal.ErrIncomingFull
+	}
+}
+
+// close closes the connection with the given error/reason.
+func (c *connection) close(err error) {
+	c.cancelOnce.Do(func() {
+		c.cancel(err)
+
+		if c.onClose != nil {
+			c.onClose()
+		}
+	})
 }

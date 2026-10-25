@@ -1,49 +1,44 @@
 package main
 
 import (
+	"context"
 	"log"
-	"time"
 
 	"github.com/maklean/rapide"
 )
 
+const ServerAddress = "localhost:3000"
+
 func main() {
-	listener, err := rapide.Listen("localhost:3000")
+	listener, err := rapide.Listen(ServerAddress)
 	if err != nil {
-		log.Fatalf("Failed to start listening on 'localhost:3000': %v", err)
+		log.Fatal(err)
 	}
 
-	log.Println("Server started on localhost:3000...")
+	log.Printf("Started listening at %s...", listener.Addr().String())
 
-	for range 2 {
-		conn, err := listener.Accept()
-
-		if err != nil {
-			continue
-		}
-
-		log.Println("ACCEPTED CLIENT")
-		go handleConnection(conn)
+	client, err := listener.Accept(context.Background())
+	if err != nil {
+		log.Fatal(err)
 	}
 
-	time.Sleep(5 * time.Second)
-	listener.Close()
-	log.Println("closed listener")
-}
+	log.Printf("Accepted client: %s", client.RemoteAddr().String())
 
-func handleConnection(conn *rapide.Connection) {
+	err = client.Send([]byte("Hello, client!"), true)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	log.Println("Sent message to client.")
+
 	buf := make([]byte, 1024)
 
-	n, err := conn.Read(buf)
+	n, err := client.Read(buf)
 	if err != nil {
-		log.Printf("There was an error trying to read from the client: %v", err)
-		return
+		log.Fatal(err)
 	}
 
-	log.Printf("Got buffer from client: %s", string(buf[:n]))
+	log.Printf("Received data from client: %s", string(buf[:n]))
 
-	err = conn.Send(buf[:n], true)
-	if err != nil {
-		log.Fatalf("failed to send buffer to connection")
-	}
+	select {}
 }

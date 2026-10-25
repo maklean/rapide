@@ -1,119 +1,98 @@
 package rapide
 
 import (
+	"context"
 	"errors"
 	"fmt"
-	"log"
 	"net"
+	"syscall"
 	"time"
 
-	"github.com/maklean/rapide/internal/config"
-	"github.com/maklean/rapide/internal/writer"
+	"github.com/maklean/rapide/internal"
 )
 
-// newUDPClient returns a datagram with the given peer as its destination address.
-func newUDPClient(address string) (*net.UDPConn, error) {
-	addr, err := net.ResolveUDPAddr("udp", address)
+// newClient returns a client connected to the given remote address.
+func newClient(ctx context.Context, remoteAddr string) (Connection, error) {
+	addr, err := net.ResolveUDPAddr("udp", remoteAddr)
 	if err != nil {
 		return nil, err
 	}
 
-	return net.DialUDP("udp", nil, addr)
-}
-
-// Dial connects to the address at the given address
-func Dial(address string) (*Connection, error) {
-	socket, err := newUDPClient(address)
+	socket, err := net.DialUDP("udp", nil, addr)
 	if err != nil {
 		return nil, err
 	}
 
-	log.Println("Sent handshake request to server...")
-	connectionID, err := sendHandshakeRequest(socket)
+	connId, err := clientSendHandshake(ctx, socket)
 	if err != nil {
 		socket.Close()
 		return nil, err
 	}
 
-	log.Printf("Got handshake response from server! ConnectionID = %d", connectionID)
+	udpConn := internal.NewUDPConnection(socket, internal.NewClientWriter(socket), addr)
 
-	conn := newConnection(connectionID, socket, writer.CreateClientWriter(socket), func() { socket.Close() })
+	// TODO: this context should probably be send by the user?
+	conn := newConnection(context.Background(), connId, udpConn, func() { udpConn.Close() })
 
-	go clientReadLoop(conn)
+	go conn.udpConnection.Read(func(_ *net.UDPAddr, p *internal.Packet) error {
+		return conn.deliver(p)
+	})
 
-	return &Connection{conn: conn, remoteAddr: socket.RemoteAddr()}, nil
+	return conn, nil
 }
 
-// sendHandshakeRequest sends a handshake request to the peer/Listener, returns the connectionId if successful.
-func sendHandshakeRequest(socket *net.UDPConn) (uint32, error) {
-	handshakePacket, err := (&Packet{IsHandshakeClient: true}).ToBytes()
+// clientSendHandshake sends a handshake request to the listener. Returns the connection ID if connected.
+func clientSendHandshake(ctx context.Context, socket *net.UDPConn) (uint32, error) {
+	handshake, err := (&internal.Packet{IsHandshakeClient: true}).ToBytes()
 	if err != nil {
-		return 0, fmt.Errorf("failed to serialize handshake packet to bytes: %v", err)
+		return 0, err
 	}
 
-	buf := make([]byte, config.MaxPayloadSize)
-	deadline := time.Now().Add(time.Duration(config.HandshakeTimeout) * time.Second)
+	defer socket.SetReadDeadline(time.Time{})
 
-	for time.Now().Before(deadline) {
-		// this I/O req. is technically shaving time off, but eh
-		_, err = socket.Write(handshakePacket)
-		if err != nil {
-			return 0, fmt.Errorf("failed to write send handshake packet to peer: %v", err)
+	buf := make([]byte, internal.MaxDatagramSize)
+
+	for ctx.Err() == nil {
+		if _, err := socket.Write(handshake); err != nil {
+			return 0, err
 		}
 
-		// wait some time before re-sending a request
-		socket.SetReadDeadline(time.Now().Add(time.Duration(config.HandshakeRequestResend) * time.Millisecond))
+		attempt := time.Now().Add(internal.HandshakeReadInterval * time.Millisecond)
+		if d, ok := ctx.Deadline(); ok && d.Before(attempt) {
+			// clamp to deadline if the attempt is after the deadline
+			attempt = d
+		}
+
+		socket.SetReadDeadline(attempt)
 
 		n, err := socket.Read(buf)
 		if err != nil {
-			var netErr net.Error
+			var nerr net.Error
 
-			if errors.As(err, &netErr) && netErr.Timeout() {
+			switch {
+			case errors.Is(err, syscall.ECONNREFUSED):
+				// listener's socket isn't up yet, retry
+				select {
+				case <-time.After(time.Until(attempt)):
+				case <-ctx.Done():
+				}
+
 				continue
+			case errors.As(err, &nerr) && nerr.Timeout():
+				// no reply, re-send
+				continue
+			default:
+				return 0, err
 			}
-
-			return 0, fmt.Errorf("failed to write read handshake response from peer: %v", err)
 		}
 
-		packet, err := FromBytes(buf[:n])
-		if err != nil || !packet.IsHandshakeServer {
+		p, err := internal.FromBytes(buf[:n])
+		if err != nil || !p.IsHandshakeServer {
 			continue
 		}
 
-		socket.SetReadDeadline(time.Time{}) // clear
-		return packet.ConnectionID, nil
+		return p.ConnectionID, nil
 	}
 
-	return 0, errors.New("handshake request timed out")
-}
-
-// clientReadLoop is the client's read loop - it accepts datagrams (that should be sent by the server)
-func clientReadLoop(c *connection) {
-	buf := make([]byte, config.MaxPayloadSize)
-
-	for {
-		n, _, err := c.socket.ReadFromUDP(buf)
-		if err != nil {
-			// if the Client's socket is closed, exit.
-			if errors.Is(err, net.ErrClosed) || c.isClosed() {
-				return
-			}
-
-			log.Println("Failed to read data from incoming datagram:", err)
-			continue
-		}
-
-		packet, err := FromBytes(buf[:n])
-		if err != nil {
-			log.Println("Failed to decode payload from incoming datagram:", err)
-			continue
-		}
-
-		// ignore duplicate handshake responses
-		if packet.IsHandshakeServer {
-			continue
-		}
-
-		c.deliver(packet)
-	}
+	return 0, fmt.Errorf("%w: %w", internal.ErrHandshakeTimeout, ctx.Err())
 }

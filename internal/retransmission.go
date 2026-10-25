@@ -1,10 +1,6 @@
-package retransmission
+package internal
 
-import (
-	"math"
-
-	"github.com/maklean/rapide/internal/config"
-)
+import "math"
 
 const alpha float64 = 1.0 / 8.0
 const beta float64 = 1.0 / 4.0
@@ -44,5 +40,6 @@ func (rt *RetransmissionTimer) DoMeasurement(rtt float64) {
 		rt.SRTT = (1-alpha)*rt.SRTT + alpha*rtt
 	}
 
-	rt.RTO = max(1, rt.SRTT+max(float64(config.ConnectionTick), k*rt.RTTVAR))
+	rt.RTO = max(1000, rt.SRTT+max(float64(ConnectionTickInterval), k*rt.RTTVAR))
+	rt.RTO = min(rt.RTO, MaxRetransmissionTimeout)
 }

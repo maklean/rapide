@@ -1,40 +1,39 @@
 package main
 
 import (
-	"fmt"
+	"context"
 	"log"
-	"math/rand/v2"
 	"time"
 
 	"github.com/maklean/rapide"
 )
 
 func main() {
-	for range 2 {
-		go connectToListener(rand.IntN(1000000))
-	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*3)
+	defer cancel()
 
-	time.Sleep(5 * time.Second)
-}
-
-func connectToListener(startNum int) {
-	conn, err := rapide.Dial("localhost:3000")
+	conn, err := rapide.Dial(ctx, "localhost:3000")
 	if err != nil {
-		return
+		log.Fatal(err)
 	}
 
-	defer conn.Close()
-
-	err = conn.Send(fmt.Appendf(nil, "RELIABLE MESSAGE %d", startNum), true)
-	if err != nil {
-		return
-	}
+	log.Printf("got connection '%s', connected to '%s'...", conn.LocalAddr().String(), conn.RemoteAddr().String())
 
 	buf := make([]byte, 1024)
+
 	n, err := conn.Read(buf)
 	if err != nil {
-		return
+		log.Fatal(err)
 	}
 
-	log.Println("Got: ", string(buf[:n]))
+	log.Printf("Received data from server: %s", string(buf[:n]))
+
+	err = conn.Send([]byte("Hello, server!"), true)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	log.Println("Sent message back to server")
+	select {}
+
 }
