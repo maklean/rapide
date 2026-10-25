@@ -54,6 +54,9 @@ type connection struct {
 	// outgoing unreliable payloads
 	unrelOutgoing chan []byte
 
+	// retransmission timer
+	retransmissionTimer internal.RetransmissionTimer
+
 	ctx        context.Context
 	cancel     context.CancelCauseFunc
 	cancelOnce sync.Once
@@ -136,20 +139,21 @@ func newConnection(parent context.Context, connectionID uint32, udpConn internal
 	ctx, cancel := context.WithCancelCause(parent)
 
 	conn := &connection{
-		connectionID:  connectionID,
-		udpConnection: udpConn,
-		reliableSeq:   internal.NewSequence(),
-		unreliableSeq: internal.NewSequence(),
-		unacked:       make(map[uint16]*internal.UnackedPacket, internal.ConnectionReceiveWindowSize),
-		pending:       make(map[uint16]*internal.Packet),
-		relIncoming:   make(chan *internal.Packet, internal.ConnectionIncomingBacklog),
-		unrelIncoming: make(chan *internal.Packet, internal.ConnectionIncomingBacklog),
-		incomingRead:  make(chan []byte, internal.ConnectionIncomingBacklog),
-		relOutgoing:   make(chan []byte, internal.ConnectionOutgoingBacklog),
-		unrelOutgoing: make(chan []byte, internal.ConnectionOutgoingBacklog),
-		ctx:           ctx,
-		cancel:        cancel,
-		onClose:       onClose,
+		connectionID:        connectionID,
+		udpConnection:       udpConn,
+		reliableSeq:         internal.NewSequence(),
+		unreliableSeq:       internal.NewSequence(),
+		unacked:             make(map[uint16]*internal.UnackedPacket, internal.ConnectionReceiveWindowSize),
+		pending:             make(map[uint16]*internal.Packet),
+		relIncoming:         make(chan *internal.Packet, internal.ConnectionIncomingBacklog),
+		unrelIncoming:       make(chan *internal.Packet, internal.ConnectionIncomingBacklog),
+		incomingRead:        make(chan []byte, internal.ConnectionIncomingBacklog),
+		relOutgoing:         make(chan []byte, internal.ConnectionOutgoingBacklog),
+		unrelOutgoing:       make(chan []byte, internal.ConnectionOutgoingBacklog),
+		retransmissionTimer: internal.RetransmissionTimerInit(),
+		ctx:                 ctx,
+		cancel:              cancel,
+		onClose:             onClose,
 	}
 
 	go conn.run()
@@ -184,6 +188,17 @@ func (c *connection) run() {
 // handleIncomingReliable handles incoming reliable packets.
 func (c *connection) handleIncomingReliable(p *internal.Packet) {
 	if p.IsAck {
+		up, ok := c.unacked[p.AckSequenceNumber]
+		if !ok {
+			return
+		}
+
+		// Karn's Algorithm states we should only take measurement for packet's that weren't retransmitted
+		if up.Retries == 0 {
+			rtt := float64(time.Since(up.LastSend).Milliseconds())
+			c.retransmissionTimer.DoMeasurement(rtt)
+		}
+
 		delete(c.unacked, p.AckSequenceNumber)
 		return
 	}
@@ -288,7 +303,30 @@ func (c *connection) handleTick(t time.Time) {
 
 // handleRetransmission handles unacknowledged packet retransmissions.
 func (c *connection) handleRetransmission(t time.Time) {
+	retransmitted := false
 
+	for sn, up := range c.unacked {
+		if float64(t.Sub(up.LastSend).Milliseconds()) < c.retransmissionTimer.RTO {
+			continue
+		}
+
+		if up.Retries >= internal.MaxRetransmissionRetries {
+			c.close(fmt.Errorf("%w: sn=%d, retries=%d", internal.ErrMaxRetransmissionsExceeded, sn, up.Retries))
+			return
+		}
+
+		// retransmit packet
+		if err := c.udpConnection.Write(up.Packet); err == nil {
+			up.LastSend = time.Now()
+			up.Retries += 1
+
+			retransmitted = true
+		}
+	}
+
+	if retransmitted {
+		c.retransmissionTimer.RTO *= 2
+	}
 }
 
 // drainPending attempts to send packets that are left in the connection's pending map (due to the incomingRead channel being full)

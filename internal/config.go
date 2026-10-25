@@ -21,3 +21,6 @@ const ConnectionReceiveWindowSize = 128
 // ConnectionTickInterval is the amount of time (in milliseconds) between each connection tick.
 // NOTE: 100ms is a recommended clock granularity for the retransmission timer (see RFC 6298 section 4)
 const ConnectionTickInterval = 100
+
+// MaxRetransmissionRetries is the maximum number of times we retransmit a packet before assuming the connection is dead
+const MaxRetransmissionRetries = 3
