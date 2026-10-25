@@ -1,46 +1,28 @@
 package rapide
 
 import (
-	"errors"
-	"log"
-	"math/rand/v2"
+	"fmt"
+	"math/rand"
 	"net"
-	"sync"
 	"syscall"
 
-	"github.com/maklean/rapide/internal/config"
-	"github.com/maklean/rapide/internal/writer"
+	"github.com/maklean/rapide/internal"
 )
 
 type Listener struct {
-	// socket for the listener
-	socket *net.UDPConn
+	// UDP connection for listener
+	conn internal.UDPConnection
 
-	// mutex for the peers map
-	peersMu sync.Mutex
-
-	// addr => connection instances that are connected to this Listener
+	// map of connectionID => peer
 	peers map[uint32]*connection
 
-	// peers that have fully established a handshake with this Listener
-	acceptedPeers chan *Connection
-
-	// signal for closing listener
-	closed chan struct{}
-
-	// needed for a thread-safe connection termination
-	closedOnce sync.Once
-
-	// signal for when we're finished closing/running the listener's loop
-	finished chan struct{}
-
-	// exited read loop?
-	readLoopDone chan struct{}
+	// peers that have established a connection (handshake)
+	acceptedPeers chan Connection
 }
 
-// newListener creates a new Listener struct instance.
-func newListener(address string) (*Listener, error) {
-	addr, err := net.ResolveUDPAddr("udp", address)
+// newListener creates a new listener listening at the given local address.
+func newListener(localAddr string) (*Listener, error) {
+	addr, err := net.ResolveUDPAddr("udp", localAddr)
 	if err != nil {
 		return nil, err
 	}
@@ -51,206 +33,70 @@ func newListener(address string) (*Listener, error) {
 	}
 
 	listener := &Listener{
-		socket:        socket,
+		conn:          internal.NewUDPConnection(socket, nil),
 		peers:         make(map[uint32]*connection),
-		acceptedPeers: make(chan *Connection, syscall.SOMAXCONN),
-		closed:        make(chan struct{}),
-		finished:      make(chan struct{}),
-		readLoopDone:  make(chan struct{}),
+		acceptedPeers: make(chan Connection, syscall.SOMAXCONN),
 	}
+
+	go listener.conn.Read(listener.handlePacket)
 
 	return listener, nil
 }
 
-// Listen creates a socket that starts listening at the given address.
-func Listen(address string) (*Listener, error) {
-	listener, err := newListener(address)
-	if err != nil {
-		return nil, err
+// handlePacket handles an incoming packet sent by a peer.
+func (l *Listener) handlePacket(addr *net.UDPAddr, p *internal.Packet) error {
+	if p.IsHandshakeClient {
+		return l.handleHandshake(addr)
 	}
 
-	go listener.listenerReadLoop()
+	_, exists := l.peers[p.ConnectionID]
 
-	go func() {
-		defer close(listener.finished)
-
-		<-listener.closed
-
-		listener.socket.Close()
-
-		<-listener.readLoopDone
-
-		listener.peersMu.Lock()
-		peers := make([]*connection, 0, len(listener.peers))
-		for _, c := range listener.peers {
-			peers = append(peers, c)
-		}
-		listener.peersMu.Unlock()
-
-		for _, peer := range peers {
-			peer.Close()
-		}
-	}()
-
-	return listener, nil
-}
-
-// Close closes the Listener.
-func (l *Listener) Close() error {
-	if l.isClosed() {
-		return errors.New("listener is closed")
+	if !exists {
+		return fmt.Errorf("%w: %d", internal.ErrInvalidConnectionID, p.ConnectionID)
 	}
-
-	l.closedOnce.Do(func() {
-		close(l.closed)
-	})
-
-	<-l.finished
 
 	return nil
 }
 
-// Accept blocks until an accepted client is created and added to the Listener's peers map.
-func (l *Listener) Accept() (*Connection, error) {
-	if l.isClosed() {
-		return nil, errors.New("listener is closed")
-	}
-
-	select {
-	case peer := <-l.acceptedPeers:
-		return peer, nil
-	case <-l.closed:
-		return nil, errors.New("listener is closed")
-	}
-}
-
-// Addr returns the local network address the Listener is bound to.
-func (l *Listener) Addr() net.Addr {
-	return l.socket.LocalAddr()
-}
-
-// listenerReadLoop is the Listener's read loop - it accepts datagrams, maps them to an existing connection (or creates one), and sends a packet into the connection's incoming packet channel.
-func (l *Listener) listenerReadLoop() {
-	defer close(l.readLoopDone)
-
-	buf := make([]byte, config.MaxPayloadSize)
-
-	for {
-		n, addr, err := l.socket.ReadFromUDP(buf)
-		if err != nil {
-			// if the Listener socket is closed, exit.
-			if errors.Is(err, net.ErrClosed) || l.isClosed() {
-				return
-			}
-
-			log.Println("Failed to read data from incoming datagram:", err)
-			continue
-		}
-
-		packet, err := FromBytes(buf[:n])
-		if err != nil {
-			log.Println("Failed to decode payload from incoming datagram:", err)
-			continue
-		}
-
-		if packet.IsHandshakeClient {
-			log.Printf("Got handshake request from '%s'...", addr.String())
-
-			// create new peer entry on handshake
-			if err := l.performHandshake(addr); err != nil {
-				log.Printf("Failed to perform handshake with client: %v", err)
-			}
-
-			continue
-		}
-
-		l.peersMu.Lock()
-		conn, exists := l.peers[packet.ConnectionID]
-		l.peersMu.Unlock()
-
-		if !exists {
-			// unknown connection ID that hasn't established a connection with the server
-			continue
-		}
-
-		conn.deliver(packet)
-	}
-}
-
-// generateConnectionID returns an unused connectionID for a new peer connection.
-func (l *Listener) generateConnectionID() uint32 {
-	connectionID := rand.Uint32()
-
-	l.peersMu.Lock()
-	defer l.peersMu.Unlock()
-
-	_, exists := l.peers[connectionID]
-
-	for exists {
-		// generate new connectionID until we proc something that isn't used
-		connectionID = rand.Uint32()
-		_, exists = l.peers[connectionID]
-	}
-
-	return connectionID
-}
-
-// performHandshake creates a new peer entry for the given connection, and sends a handshake packet to them.
-func (l *Listener) performHandshake(addr *net.UDPAddr) error {
+// handleHandshake handles an incoming handshake request by a client at the given remote address.
+func (l *Listener) handleHandshake(addr *net.UDPAddr) error {
 	if len(l.acceptedPeers) == cap(l.acceptedPeers) {
-		return errors.New("backlog full, dropping handshake")
+		return internal.ErrListenerBacklogFull
 	}
 
-	connID := l.generateConnectionID()
+	// genConnID generates an unused connection ID.
+	genConnID := func() uint32 {
+		connId := rand.Uint32()
 
-	// removes the peer from the peers map
-	removePeer := func() {
-		l.peersMu.Lock()
-		delete(l.peers, connID)
-		l.peersMu.Unlock()
+		_, exists := l.peers[connId]
+
+		for exists {
+			connId = rand.Uint32()
+			_, exists = l.peers[connId]
+		}
+
+		return connId
 	}
 
-	conn := newConnection(connID, l.socket, writer.CreateListenerWriter(l.socket, addr), removePeer)
+	socket := l.conn.Socket()
+	connId := genConnID()
 
-	l.peersMu.Lock()
-	l.peers[conn.connectionID] = conn
-	l.peersMu.Unlock()
+	conn := newConnection(connId, internal.NewUDPConnection(socket, internal.NewListenerWriter(socket, addr)))
+	l.peers[connId] = conn
 
-	// send raw handshake packet to client
-	handshakePacket := Packet{ConnectionID: conn.connectionID, IsHandshakeServer: true}
-	data, err := handshakePacket.ToBytes()
+	// send handshake packet back to client, TODO: close connection on errors
+	handshake, err := (&internal.Packet{ConnectionID: connId, IsHandshakeServer: true}).ToBytes()
 	if err != nil {
-		removePeer()
-		conn.Close()
+		delete(l.peers, connId)
 		return err
 	}
 
-	if err := conn.writer.Write(data); err != nil {
-		removePeer()
-		conn.Close()
+	if err := conn.udpConnection.Write(handshake); err != nil {
+		delete(l.peers, connId)
 		return err
 	}
 
-	log.Printf("Sent handshake response to '%s'... ConnectionID = %d", addr.String(), conn.connectionID)
-
-	// add to accepted channel
-	select {
-	case l.acceptedPeers <- &Connection{conn: conn, remoteAddr: addr}:
-	case <-l.closed:
-		removePeer()
-		conn.Close()
-		return errors.New("listener is closed")
-	}
+	l.acceptedPeers <- conn
 
 	return nil
-}
-
-// isClosed returns whether the Listener's connection is closed.
-func (l *Listener) isClosed() bool {
-	select {
-	case <-l.closed:
-		return true
-	default:
-		return false
-	}
 }
