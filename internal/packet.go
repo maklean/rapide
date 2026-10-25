@@ -6,7 +6,7 @@ import (
 )
 
 type Packet struct {
-	// the peer connection ID for this packet (0 = unknown)
+	// the peer connection ID for this packet
 	ConnectionID uint32
 
 	// whether this is a handshake packet sent by the client or not
