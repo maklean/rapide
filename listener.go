@@ -96,7 +96,10 @@ func (l *Listener) handleHandshake(addr *net.UDPAddr) error {
 		return err
 	}
 
-	l.acceptedPeers <- conn
-
-	return nil
+	select {
+	case l.acceptedPeers <- conn:
+		return nil
+	default:
+		return internal.ErrListenerBacklogFull
+	}
 }
