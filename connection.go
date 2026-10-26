@@ -46,7 +46,7 @@ type connection struct {
 	unrelIncoming chan *internal.Packet
 
 	// incoming packets (for user API / Connection.Read())
-	incomingRead chan []byte
+	receiveQueue *internal.ReceiveQueue
 
 	// outgoing reliable payloads
 	relOutgoing chan []byte
@@ -100,15 +100,12 @@ func (c *connection) Read(buf []byte) (int, error) {
 		return 0, internal.ErrClientConnectionClosed
 	}
 
-	for {
-		select {
-		case data := <-c.incomingRead:
-			n := copy(buf, data)
-			return n, nil
-		case <-c.ctx.Done():
-			return 0, internal.ErrClientConnectionClosed
-		}
+	data, err := c.receiveQueue.Pop(c.ctx)
+	if err != nil {
+		return 0, internal.ErrClientConnectionClosed
 	}
+
+	return copy(buf, data), nil
 }
 
 // LocalAddr returns the local address this connection is bound to.
@@ -149,7 +146,7 @@ func newConnection(parent context.Context, connectionID uint32, udpConn internal
 		pending:             make(map[uint16]*internal.Packet),
 		relIncoming:         make(chan *internal.Packet, internal.ConnectionIncomingBacklog),
 		unrelIncoming:       make(chan *internal.Packet, internal.ConnectionIncomingBacklog),
-		incomingRead:        make(chan []byte, internal.ConnectionIncomingBacklog),
+		receiveQueue:        internal.NewReceiveQueue(internal.ConnectionReceiveWindowSize), // TODO: find proper initialization value for receive buffer/queue
 		relOutgoing:         make(chan []byte, internal.ConnectionOutgoingBacklog),
 		unrelOutgoing:       make(chan []byte, internal.ConnectionOutgoingBacklog),
 		retransmissionTimer: internal.NewRetransmissionTimer(),
@@ -215,35 +212,32 @@ func (c *connection) handleIncomingReliable(p *internal.Packet) {
 		return
 	}
 
-	if dist >= internal.ConnectionReceiveWindowSize {
+	if dist >= int16(c.receiveQueue.Capacity()) {
 		return
 	}
 
-	if len(c.incomingRead) == cap(c.incomingRead) && dist == 0 {
-		// cannot deliver packet immediately b/c channel is full
+	if dist == 0 && c.receiveQueue.Free() == 0 {
+		// no more space in the receive queue
 		return
 	}
 
 	c.sendAck(sn)
 	c.pending[sn.Value] = p
 
-	// reorder packets starting from the current next incoming sequence number, then send into incomingRead
-	for len(c.incomingRead) < cap(c.incomingRead) {
+	// reorder packets starting from the current next incoming sequence number, then send into the receive queue
+	for {
 		p, exists := c.pending[c.reliableSeq.NextIn.Value]
 
 		if !exists {
 			break
 		}
 
-		select {
-		case c.incomingRead <- p.Payload:
-			delete(c.pending, c.reliableSeq.NextIn.Value)
-			c.reliableSeq.NextIn = c.reliableSeq.NextIn.Next()
-		case <-c.ctx.Done():
-			return
-		default:
-			return
+		if !c.receiveQueue.Push(p.Payload) {
+			break
 		}
+
+		delete(c.pending, c.reliableSeq.NextIn.Value)
+		c.reliableSeq.NextIn = c.reliableSeq.NextIn.Next()
 	}
 }
 
@@ -255,14 +249,11 @@ func (c *connection) handleIncomingUnreliable(p *internal.Packet) {
 		return
 	}
 
-	select {
-	case c.incomingRead <- p.Payload:
-		c.unreliableSeq.NextIn = sn.Next()
-	case <-c.ctx.Done():
-		return
-	default:
+	if !c.receiveQueue.Push(p.Payload) {
 		return
 	}
+
+	c.unreliableSeq.NextIn = sn.Next()
 }
 
 // handleOutgoing handles outgoing data.
@@ -345,15 +336,12 @@ func (c *connection) drainPending() {
 			break
 		}
 
-		select {
-		case c.incomingRead <- p.Payload:
-			delete(c.pending, c.reliableSeq.NextIn.Value)
-			c.reliableSeq.NextIn = c.reliableSeq.NextIn.Next()
-		case <-c.ctx.Done():
-			return
-		default:
-			return
+		if !c.receiveQueue.Push(p.Payload) {
+			break
 		}
+
+		delete(c.pending, c.reliableSeq.NextIn.Value)
+		c.reliableSeq.NextIn = c.reliableSeq.NextIn.Next()
 	}
 }
 
