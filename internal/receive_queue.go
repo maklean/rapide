@@ -79,6 +79,8 @@ func (r *ReceiveQueue) Pop(ctx context.Context) ([]byte, error) {
 
 // Free returns the number of free slots in the ReceiveQueue.
 func (r *ReceiveQueue) Free() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	return len(r.buf) - r.size
 }
 
@@ -88,6 +90,7 @@ func (r *ReceiveQueue) Capacity() int {
 }
 
 // i returns the proper index in the ReceiveQueue using modular arithmetic.
+// NOTE: i assumes the caller has hold of the ReceiveQueue's lock.
 func (r *ReceiveQueue) i(index int) int {
 	return (r.start + index) % len(r.buf)
 }

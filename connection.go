@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"log"
+	"math/rand"
 	"net"
 	"sync"
 	"time"
@@ -33,6 +35,10 @@ type connection struct {
 	// unreliable sequence numbers
 	unreliableSeq internal.Sequence
 
+	// global sequence numbers
+	// TODO: If we're never gonna use globalSeq.NextIn, change this to internal.SequenceNumber
+	globalSeq internal.Sequence
+
 	// map of sequence number => unacknowledged reliable packet
 	unacked map[uint16]*internal.UnackedPacket
 
@@ -57,6 +63,12 @@ type connection struct {
 	// retransmission timer
 	retransmissionTimer internal.RetransmissionTimer
 
+	// peer's receive limit
+	pReceiveLimit uint16
+
+	// the global sequence number of the packet that got us the current pReceiveLimit
+	pReceiveLimitSeq internal.SequenceNumber
+
 	ctx        context.Context
 	cancel     context.CancelCauseFunc
 	cancelOnce sync.Once
@@ -76,20 +88,22 @@ func (c *connection) Send(data []byte, reliable bool) error {
 
 	data = bytes.Clone(data)
 
-	ch := c.unrelOutgoing
 	if reliable {
-		ch = c.relOutgoing
-	}
-
-	for {
 		select {
-		case ch <- data:
+		case c.relOutgoing <- data:
 			return nil
 		case <-c.ctx.Done():
 			return internal.ErrClientConnectionClosed
-		default:
-			return internal.ErrOutgoingFull
 		}
+	}
+
+	select {
+	case c.unrelOutgoing <- data:
+		return nil
+	case <-c.ctx.Done():
+		return internal.ErrClientConnectionClosed
+	default:
+		return internal.ErrOutgoingFull
 	}
 }
 
@@ -104,6 +118,8 @@ func (c *connection) Read(buf []byte) (int, error) {
 	if err != nil {
 		return 0, internal.ErrClientConnectionClosed
 	}
+
+	log.Printf("[send] THIS connection's receive limit = %d", c.receiveLimit())
 
 	return copy(buf, data), nil
 }
@@ -142,6 +158,7 @@ func newConnection(parent context.Context, connectionID uint32, udpConn internal
 		udpConnection:       udpConn,
 		reliableSeq:         internal.NewSequence(),
 		unreliableSeq:       internal.NewSequence(),
+		globalSeq:           internal.NewSequence(),
 		unacked:             make(map[uint16]*internal.UnackedPacket, internal.ConnectionReceiveWindowSize),
 		pending:             make(map[uint16]*internal.Packet),
 		relIncoming:         make(chan *internal.Packet, internal.ConnectionIncomingBacklog),
@@ -150,6 +167,8 @@ func newConnection(parent context.Context, connectionID uint32, udpConn internal
 		relOutgoing:         make(chan []byte, internal.ConnectionOutgoingBacklog),
 		unrelOutgoing:       make(chan []byte, internal.ConnectionOutgoingBacklog),
 		retransmissionTimer: internal.NewRetransmissionTimer(),
+		pReceiveLimit:       internal.ConnectionReceiveWindowSize, // TODO: rn this isn't configurable, so we'll assume a fully empty ReceiveQueue at the start
+		pReceiveLimitSeq:    internal.NewSequenceNumber(0),
 		ctx:                 ctx,
 		cancel:              cancel,
 		onClose:             onClose,
@@ -167,12 +186,17 @@ func (c *connection) run() {
 	defer ticker.Stop()
 
 	for {
+		relOutCh := c.relOutgoing
+		if c.reliableSeq.NextOut.Geq(internal.NewSequenceNumber(c.pReceiveLimit)) {
+			relOutCh = nil // don't send any reliable packets if the peer's receive window is full
+		}
+
 		select {
 		case p := <-c.relIncoming:
 			c.handleIncomingReliable(p)
 		case p := <-c.unrelIncoming:
 			c.handleIncomingUnreliable(p)
-		case data := <-c.relOutgoing:
+		case data := <-relOutCh:
 			c.handleOutgoing(data, true)
 		case data := <-c.unrelOutgoing:
 			c.handleOutgoing(data, false)
@@ -186,6 +210,8 @@ func (c *connection) run() {
 
 // handleIncomingReliable handles incoming reliable packets.
 func (c *connection) handleIncomingReliable(p *internal.Packet) {
+	c.updateReceiveLimit(p)
+
 	if p.IsAck {
 		up, ok := c.unacked[p.AckSequenceNumber]
 		if !ok {
@@ -213,11 +239,16 @@ func (c *connection) handleIncomingReliable(p *internal.Packet) {
 	}
 
 	if dist >= int16(c.receiveQueue.Capacity()) {
+		log.Println("sender somehow violated the receive limit")
 		return
 	}
 
 	if dist == 0 && c.receiveQueue.Free() == 0 {
 		// no more space in the receive queue
+		return
+	}
+
+	if rand.Intn(100) <= 20 {
 		return
 	}
 
@@ -236,6 +267,8 @@ func (c *connection) handleIncomingReliable(p *internal.Packet) {
 			break
 		}
 
+		log.Printf("[reliable] THIS connection's receive limit = %d", c.receiveLimit())
+
 		delete(c.pending, c.reliableSeq.NextIn.Value)
 		c.reliableSeq.NextIn = c.reliableSeq.NextIn.Next()
 	}
@@ -243,9 +276,16 @@ func (c *connection) handleIncomingReliable(p *internal.Packet) {
 
 // handleIncomingUnreliable handles incoming unreliable packets.
 func (c *connection) handleIncomingUnreliable(p *internal.Packet) {
+	c.updateReceiveLimit(p)
+
 	sn := p.Sn()
 
 	if sn.Lt(c.unreliableSeq.NextIn) {
+		return
+	}
+
+	if 3*c.receiveQueue.Free() <= c.receiveQueue.Capacity() {
+		// if the free space available is at most 1/3 of the capacity, drop
 		return
 	}
 
@@ -253,7 +293,24 @@ func (c *connection) handleIncomingUnreliable(p *internal.Packet) {
 		return
 	}
 
+	log.Printf("[unreliable] THIS connection's receive limit = %d", c.receiveLimit())
+
 	c.unreliableSeq.NextIn = sn.Next()
+}
+
+// updateReceiveLimit updates the connection's receive limit based on the packet its peer sent.
+func (c *connection) updateReceiveLimit(p *internal.Packet) {
+	sn := p.GSn()
+
+	if c.pReceiveLimitSeq.Gt(sn) {
+		// old window update, reject
+		return
+	}
+
+	c.pReceiveLimitSeq = sn
+	c.pReceiveLimit = p.ReceiveLimit
+
+	log.Printf("new peer receive limit = %d", c.pReceiveLimit)
 }
 
 // handleOutgoing handles outgoing data.
@@ -265,11 +322,13 @@ func (c *connection) handleOutgoing(data []byte, reliable bool) {
 	}
 
 	p, err := (&internal.Packet{
-		ConnectionID:      c.connectionID,
-		RawSequenceNumber: sn.Value,
-		IsReliable:        reliable,
-		PayloadSize:       uint16(len(data)),
-		Payload:           data,
+		ConnectionID:         c.connectionID,
+		RawSequenceNumber:    sn.Value,
+		GlobalSequenceNumber: c.globalSeq.NextOut.Value,
+		ReceiveLimit:         c.receiveLimit(),
+		IsReliable:           reliable,
+		PayloadSize:          uint16(len(data)),
+		Payload:              data,
 	}).ToBytes()
 
 	if err != nil {
@@ -284,6 +343,8 @@ func (c *connection) handleOutgoing(data []byte, reliable bool) {
 		}
 		return
 	}
+
+	c.globalSeq.NextOut = c.globalSeq.NextOut.Next()
 
 	if reliable {
 		c.unacked[sn.Value] = &internal.UnackedPacket{Packet: p, LastSend: time.Now(), Retries: 0}
@@ -340,6 +401,8 @@ func (c *connection) drainPending() {
 			break
 		}
 
+		log.Printf("[reliable - draining] THIS connection's receive limit = %d", c.receiveLimit())
+
 		delete(c.pending, c.reliableSeq.NextIn.Value)
 		c.reliableSeq.NextIn = c.reliableSeq.NextIn.Next()
 	}
@@ -347,12 +410,21 @@ func (c *connection) drainPending() {
 
 // sendAck sends an acknowledgement packet for the given sequence number to the connection's peer.
 func (c *connection) sendAck(ackSn internal.SequenceNumber) {
-	ack, err := (&internal.Packet{ConnectionID: c.connectionID, IsAck: true, AckSequenceNumber: ackSn.Value}).ToBytes()
+	ack, err := (&internal.Packet{
+		ConnectionID:         c.connectionID,
+		IsAck:                true,
+		AckSequenceNumber:    ackSn.Value,
+		GlobalSequenceNumber: c.globalSeq.NextOut.Value,
+		ReceiveLimit:         c.receiveLimit(),
+	}).ToBytes()
+
 	if err != nil {
 		return
 	}
 
-	c.udpConnection.Write(ack)
+	if err := c.udpConnection.Write(ack); err == nil {
+		c.globalSeq.NextOut = c.globalSeq.NextOut.Next()
+	}
 }
 
 // deliver adds the given packet to the correct incoming channel.
@@ -370,6 +442,11 @@ func (c *connection) deliver(p *internal.Packet) error {
 	default:
 		return internal.ErrIncomingFull
 	}
+}
+
+// receiveLimit calculates this connection's ReceiveLimit.
+func (c *connection) receiveLimit() uint16 {
+	return c.reliableSeq.NextIn.Value + uint16(c.receiveQueue.Free())
 }
 
 // close closes the connection with the given error/reason.

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"time"
 
@@ -19,21 +20,16 @@ func main() {
 
 	log.Printf("got connection '%s', connected to '%s'...", conn.LocalAddr().String(), conn.RemoteAddr().String())
 
-	buf := make([]byte, 1024)
+	i := 0
 
-	n, err := conn.Read(buf)
-	if err != nil {
-		log.Fatal(err)
+	for {
+		err = conn.Send(fmt.Appendf(nil, "Hello Server %d!", i), true)
+		if err != nil {
+			log.Fatal(err)
+		}
+
+		i++
+
+		log.Println("Sent message to server")
 	}
-
-	log.Printf("Received data from server: %s", string(buf[:n]))
-
-	err = conn.Send([]byte("Hello, server!"), true)
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	log.Println("Sent message back to server")
-	select {}
-
 }
