@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"log"
 	"net"
 	"sync"
 	"time"
@@ -242,7 +241,6 @@ func (c *connection) handleIncomingReliable(p *internal.Packet) {
 	}
 
 	if dist >= int16(c.receiveQueue.Capacity()) {
-		log.Println("sender somehow violated the receive limit")
 		return
 	}
 
