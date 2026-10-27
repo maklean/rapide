@@ -33,6 +33,10 @@ type connection struct {
 	// unreliable sequence numbers
 	unreliableSeq internal.Sequence
 
+	// global sequence numbers
+	// TODO: If we're never gonna use globalSeq.NextIn, change this to internal.SequenceNumber
+	globalSeq internal.Sequence
+
 	// map of sequence number => unacknowledged reliable packet
 	unacked map[uint16]*internal.UnackedPacket
 
@@ -45,8 +49,11 @@ type connection struct {
 	// incoming unreliable packets
 	unrelIncoming chan *internal.Packet
 
-	// incoming packets (for user API / Connection.Read())
-	incomingRead chan []byte
+	// reliable receive queue
+	relReceive chan []byte
+
+	// unreliable receive queue
+	unrelReceive chan []byte
 
 	// outgoing reliable payloads
 	relOutgoing chan []byte
@@ -57,6 +64,15 @@ type connection struct {
 	// retransmission timer
 	retransmissionTimer internal.RetransmissionTimer
 
+	// peer's receive limit
+	pReceiveLimit uint16
+
+	// the global sequence number of the packet that got us the current pReceiveLimit
+	pReceiveLimitSeq internal.SequenceNumber
+
+	// last time we sent a window update
+	lastWindowUpdate time.Time
+
 	ctx        context.Context
 	cancel     context.CancelCauseFunc
 	cancelOnce sync.Once
@@ -66,7 +82,7 @@ type connection struct {
 // Send sends the given payload to the connection's peer.
 func (c *connection) Send(data []byte, reliable bool) error {
 	if c.IsClosed() {
-		return internal.ErrClientConnectionClosed
+		return fmt.Errorf("%w: %v", internal.ErrClientConnectionClosed, context.Cause(c.ctx))
 	}
 
 	if len(data) > internal.MaxPayloadSize {
@@ -76,20 +92,22 @@ func (c *connection) Send(data []byte, reliable bool) error {
 
 	data = bytes.Clone(data)
 
-	ch := c.unrelOutgoing
 	if reliable {
-		ch = c.relOutgoing
-	}
-
-	for {
 		select {
-		case ch <- data:
+		case c.relOutgoing <- data:
 			return nil
 		case <-c.ctx.Done():
-			return internal.ErrClientConnectionClosed
-		default:
-			return internal.ErrOutgoingFull
+			return fmt.Errorf("%w: %v", internal.ErrClientConnectionClosed, context.Cause(c.ctx))
 		}
+	}
+
+	select {
+	case c.unrelOutgoing <- data:
+		return nil
+	case <-c.ctx.Done():
+		return fmt.Errorf("%w: %v", internal.ErrClientConnectionClosed, context.Cause(c.ctx))
+	default:
+		return internal.ErrOutgoingFull
 	}
 }
 
@@ -97,17 +115,23 @@ func (c *connection) Send(data []byte, reliable bool) error {
 // The incoming data is put into the given buffer and the number of bytes written into the buffer is returned.
 func (c *connection) Read(buf []byte) (int, error) {
 	if c.IsClosed() {
-		return 0, internal.ErrClientConnectionClosed
+		return 0, fmt.Errorf("%w: %v", internal.ErrClientConnectionClosed, context.Cause(c.ctx))
 	}
 
-	for {
-		select {
-		case data := <-c.incomingRead:
-			n := copy(buf, data)
-			return n, nil
-		case <-c.ctx.Done():
-			return 0, internal.ErrClientConnectionClosed
-		}
+	// prefer reliable first
+	select {
+	case data := <-c.relReceive:
+		return copy(buf, data), nil
+	default:
+	}
+
+	select {
+	case data := <-c.relReceive:
+		return copy(buf, data), nil
+	case data := <-c.unrelReceive:
+		return copy(buf, data), nil
+	case <-c.ctx.Done():
+		return 0, fmt.Errorf("%w: %v", internal.ErrClientConnectionClosed, context.Cause(c.ctx))
 	}
 }
 
@@ -124,7 +148,7 @@ func (c *connection) RemoteAddr() net.Addr {
 // Close closes the connection.
 func (c *connection) Close() error {
 	if c.IsClosed() {
-		return internal.ErrClientConnectionClosed
+		return fmt.Errorf("%w: %v", internal.ErrClientConnectionClosed, context.Cause(c.ctx))
 	}
 
 	c.close(internal.ErrCloseRequest)
@@ -145,14 +169,19 @@ func newConnection(parent context.Context, connectionID uint32, udpConn internal
 		udpConnection:       udpConn,
 		reliableSeq:         internal.NewSequence(),
 		unreliableSeq:       internal.NewSequence(),
+		globalSeq:           internal.NewSequence(),
 		unacked:             make(map[uint16]*internal.UnackedPacket, internal.ConnectionReceiveWindowSize),
 		pending:             make(map[uint16]*internal.Packet),
 		relIncoming:         make(chan *internal.Packet, internal.ConnectionIncomingBacklog),
 		unrelIncoming:       make(chan *internal.Packet, internal.ConnectionIncomingBacklog),
-		incomingRead:        make(chan []byte, internal.ConnectionIncomingBacklog),
+		relReceive:          make(chan []byte, internal.ConnectionReceiveWindowSize),
+		unrelReceive:        make(chan []byte, internal.ConnectionReceiveWindowSize),
 		relOutgoing:         make(chan []byte, internal.ConnectionOutgoingBacklog),
 		unrelOutgoing:       make(chan []byte, internal.ConnectionOutgoingBacklog),
-		retransmissionTimer: internal.RetransmissionTimerInit(),
+		retransmissionTimer: internal.NewRetransmissionTimer(),
+		pReceiveLimit:       internal.ConnectionReceiveWindowSize, // TODO: rn this isn't configurable, so we'll assume a fully empty ReceiveQueue at the start
+		pReceiveLimitSeq:    internal.NewSequenceNumber(0),
+		lastWindowUpdate:    time.Now(),
 		ctx:                 ctx,
 		cancel:              cancel,
 		onClose:             onClose,
@@ -170,12 +199,17 @@ func (c *connection) run() {
 	defer ticker.Stop()
 
 	for {
+		relOutCh := c.relOutgoing
+		if c.reliableSeq.NextOut.Geq(internal.NewSequenceNumber(c.pReceiveLimit)) {
+			relOutCh = nil // don't send any reliable packets if the peer's receive window is full
+		}
+
 		select {
 		case p := <-c.relIncoming:
 			c.handleIncomingReliable(p)
 		case p := <-c.unrelIncoming:
 			c.handleIncomingUnreliable(p)
-		case data := <-c.relOutgoing:
+		case data := <-relOutCh:
 			c.handleOutgoing(data, true)
 		case data := <-c.unrelOutgoing:
 			c.handleOutgoing(data, false)
@@ -189,6 +223,8 @@ func (c *connection) run() {
 
 // handleIncomingReliable handles incoming reliable packets.
 func (c *connection) handleIncomingReliable(p *internal.Packet) {
+	c.updateReceiveLimit(p)
+
 	if p.IsAck {
 		up, ok := c.unacked[p.AckSequenceNumber]
 		if !ok {
@@ -203,6 +239,8 @@ func (c *connection) handleIncomingReliable(p *internal.Packet) {
 
 		delete(c.unacked, p.AckSequenceNumber)
 		return
+	} else if p.IsWindowUpdate {
+		return
 	}
 
 	sn := p.Sn()
@@ -215,20 +253,15 @@ func (c *connection) handleIncomingReliable(p *internal.Packet) {
 		return
 	}
 
-	if dist >= internal.ConnectionReceiveWindowSize {
-		return
-	}
-
-	if len(c.incomingRead) == cap(c.incomingRead) && dist == 0 {
-		// cannot deliver packet immediately b/c channel is full
+	if dist >= int16(cap(c.relReceive)) || (dist == 0 && c.relFree() == 0) {
 		return
 	}
 
 	c.sendAck(sn)
 	c.pending[sn.Value] = p
 
-	// reorder packets starting from the current next incoming sequence number, then send into incomingRead
-	for len(c.incomingRead) < cap(c.incomingRead) {
+	// reorder packets starting from the current next incoming sequence number, then send into the receive queue
+	for {
 		p, exists := c.pending[c.reliableSeq.NextIn.Value]
 
 		if !exists {
@@ -236,7 +269,7 @@ func (c *connection) handleIncomingReliable(p *internal.Packet) {
 		}
 
 		select {
-		case c.incomingRead <- p.Payload:
+		case c.relReceive <- p.Payload:
 			delete(c.pending, c.reliableSeq.NextIn.Value)
 			c.reliableSeq.NextIn = c.reliableSeq.NextIn.Next()
 		case <-c.ctx.Done():
@@ -249,6 +282,8 @@ func (c *connection) handleIncomingReliable(p *internal.Packet) {
 
 // handleIncomingUnreliable handles incoming unreliable packets.
 func (c *connection) handleIncomingUnreliable(p *internal.Packet) {
+	c.updateReceiveLimit(p)
+
 	sn := p.Sn()
 
 	if sn.Lt(c.unreliableSeq.NextIn) {
@@ -256,13 +291,24 @@ func (c *connection) handleIncomingUnreliable(p *internal.Packet) {
 	}
 
 	select {
-	case c.incomingRead <- p.Payload:
+	case c.unrelReceive <- p.Payload:
 		c.unreliableSeq.NextIn = sn.Next()
 	case <-c.ctx.Done():
-		return
 	default:
+	}
+}
+
+// updateReceiveLimit updates the connection's receive limit based on the packet its peer sent.
+func (c *connection) updateReceiveLimit(p *internal.Packet) {
+	sn := p.GSn()
+
+	if c.pReceiveLimitSeq.Gt(sn) {
+		// old window update, reject
 		return
 	}
+
+	c.pReceiveLimitSeq = sn
+	c.pReceiveLimit = p.ReceiveLimit
 }
 
 // handleOutgoing handles outgoing data.
@@ -274,11 +320,13 @@ func (c *connection) handleOutgoing(data []byte, reliable bool) {
 	}
 
 	p, err := (&internal.Packet{
-		ConnectionID:      c.connectionID,
-		RawSequenceNumber: sn.Value,
-		IsReliable:        reliable,
-		PayloadSize:       uint16(len(data)),
-		Payload:           data,
+		ConnectionID:         c.connectionID,
+		RawSequenceNumber:    sn.Value,
+		GlobalSequenceNumber: c.globalSeq.NextOut.Value,
+		ReceiveLimit:         c.receiveLimit(),
+		IsReliable:           reliable,
+		PayloadSize:          uint16(len(data)),
+		Payload:              data,
 	}).ToBytes()
 
 	if err != nil {
@@ -294,6 +342,8 @@ func (c *connection) handleOutgoing(data []byte, reliable bool) {
 		return
 	}
 
+	c.globalSeq.NextOut = c.globalSeq.NextOut.Next()
+
 	if reliable {
 		c.unacked[sn.Value] = &internal.UnackedPacket{Packet: p, LastSend: time.Now(), Retries: 0}
 		c.reliableSeq.NextOut = sn.Next()
@@ -306,6 +356,7 @@ func (c *connection) handleOutgoing(data []byte, reliable bool) {
 func (c *connection) handleTick(t time.Time) {
 	c.drainPending()
 	c.handleRetransmission(t)
+	c.checkWindowUpdate(t)
 }
 
 // handleRetransmission handles unacknowledged packet retransmissions.
@@ -346,7 +397,7 @@ func (c *connection) drainPending() {
 		}
 
 		select {
-		case c.incomingRead <- p.Payload:
+		case c.relReceive <- p.Payload:
 			delete(c.pending, c.reliableSeq.NextIn.Value)
 			c.reliableSeq.NextIn = c.reliableSeq.NextIn.Next()
 		case <-c.ctx.Done():
@@ -357,31 +408,78 @@ func (c *connection) drainPending() {
 	}
 }
 
-// sendAck sends an acknowledgement packet for the given sequence number to the connection's peer.
-func (c *connection) sendAck(ackSn internal.SequenceNumber) {
-	ack, err := (&internal.Packet{ConnectionID: c.connectionID, IsAck: true, AckSequenceNumber: ackSn.Value}).ToBytes()
+// checkWindowUpdate handles sending receive limit updates to the peer
+func (c *connection) checkWindowUpdate(t time.Time) {
+	if t.Sub(c.lastWindowUpdate).Milliseconds() < internal.ReceiveLimitUpdateInterval {
+		return
+	}
+
+	c.sendWindowUpdate()
+}
+
+// sendWindowUpdate a window update packet to the client.
+func (c *connection) sendWindowUpdate() {
+	update, err := (&internal.Packet{
+		ConnectionID:         c.connectionID,
+		IsWindowUpdate:       true,
+		GlobalSequenceNumber: c.globalSeq.NextOut.Value,
+		ReceiveLimit:         c.receiveLimit(),
+	}).ToBytes()
+
 	if err != nil {
 		return
 	}
 
-	c.udpConnection.Write(ack)
+	if err := c.udpConnection.Write(update); err == nil {
+		c.globalSeq.NextOut = c.globalSeq.NextOut.Next()
+		c.lastWindowUpdate = time.Now()
+	}
+}
+
+// sendAck sends an acknowledgement packet for the given sequence number to the connection's peer.
+func (c *connection) sendAck(ackSn internal.SequenceNumber) {
+	ack, err := (&internal.Packet{
+		ConnectionID:         c.connectionID,
+		IsAck:                true,
+		AckSequenceNumber:    ackSn.Value,
+		GlobalSequenceNumber: c.globalSeq.NextOut.Value,
+		ReceiveLimit:         c.receiveLimit(),
+	}).ToBytes()
+
+	if err != nil {
+		return
+	}
+
+	if err := c.udpConnection.Write(ack); err == nil {
+		c.globalSeq.NextOut = c.globalSeq.NextOut.Next()
+	}
 }
 
 // deliver adds the given packet to the correct incoming channel.
 func (c *connection) deliver(p *internal.Packet) error {
 	ch := c.unrelIncoming
-	if p.IsReliable || p.IsAck {
+	if p.IsReliable || p.IsAck || p.IsWindowUpdate {
 		ch = c.relIncoming
 	}
 
 	select {
 	case <-c.ctx.Done():
-		return internal.ErrClientConnectionClosed
+		return fmt.Errorf("%w: %v", internal.ErrClientConnectionClosed, context.Cause(c.ctx))
 	case ch <- p:
 		return nil
 	default:
 		return internal.ErrIncomingFull
 	}
+}
+
+// receiveLimit calculates this connection's ReceiveLimit.
+func (c *connection) receiveLimit() uint16 {
+	return c.reliableSeq.NextIn.Value + uint16(c.relFree())
+}
+
+// relFree returns the free space on the relReceive channel.
+func (c *connection) relFree() int {
+	return cap(c.relReceive) - len(c.relReceive)
 }
 
 // close closes the connection with the given error/reason.

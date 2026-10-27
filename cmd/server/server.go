@@ -24,21 +24,14 @@ func main() {
 
 	log.Printf("Accepted client: %s", client.RemoteAddr().String())
 
-	err = client.Send([]byte("Hello, client!"), true)
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	log.Println("Sent message to client.")
-
 	buf := make([]byte, 1024)
 
-	n, err := client.Read(buf)
-	if err != nil {
-		log.Fatal(err)
+	for {
+		n, err := client.Read(buf)
+		if err != nil {
+			log.Fatal(err)
+		}
+
+		log.Printf("Received data from client: %s", string(buf[:n]))
 	}
-
-	log.Printf("Received data from client: %s", string(buf[:n]))
-
-	select {}
 }

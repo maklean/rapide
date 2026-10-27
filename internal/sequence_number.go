@@ -5,8 +5,8 @@ type SequenceNumber struct {
 	Value uint16
 }
 
-// SequenceNumberInit initializes a SequenceNumber with the given value
-func SequenceNumberInit(value uint16) (sn SequenceNumber) {
+// NewSequenceNumber initializes a SequenceNumber with the given value
+func NewSequenceNumber(value uint16) (sn SequenceNumber) {
 	sn.Value = value
 	return
 }
@@ -17,7 +17,7 @@ func (sn SequenceNumber) Next() (snN SequenceNumber) {
 	return
 }
 
-// Le returns whether the current sequence number is less than the given one.
+// Lt returns whether the current sequence number is less than the given one.
 func (sn SequenceNumber) Lt(other SequenceNumber) bool {
 	return sn.Distance(other) < 0
 }
@@ -42,7 +42,7 @@ func (sn SequenceNumber) Eq(other SequenceNumber) bool {
 	return sn.Distance(other) == 0
 }
 
-// distance returns the signed distance between the current and given sequence number.
+// Distance returns the signed distance between the current and given sequence number.
 func (sn SequenceNumber) Distance(other SequenceNumber) int16 {
 	var diff uint16 = sn.Value - other.Value
 	return int16(diff)

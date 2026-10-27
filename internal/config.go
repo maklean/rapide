@@ -3,7 +3,7 @@ package internal
 // MaxDatagramSize is the maximum size (in bytes) an incoming datagram can be.
 const MaxDatagramSize = 1472
 
-// MaxPayloadSize is the maximum size a datagram's payload can carry.
+// MaxPayloadSize is the maximum size a datagram's payload can carry (Maximum Segment Size).
 const MaxPayloadSize = MaxDatagramSize - PacketHeaderSize
 
 // HandshakeReadInterval is the amount of time (in milliseconds) we wait before reading a handshake packet.
@@ -26,7 +26,13 @@ const ConnectionReceiveWindowSize = 128
 const ConnectionTickInterval = 100
 
 // MaxRetransmissionRetries is the maximum number of times we retransmit a packet before assuming the connection is dead
-const MaxRetransmissionRetries = 3
+const MaxRetransmissionRetries = 10
 
 // MaxRetransmissionTimeout is the maximum retransmission timeout (in milliseconds)
 const MaxRetransmissionTimeout = 60000
+
+// CongestionWindowSize (cwnd) is a placeholder constant for the congestion window (until I properly implement congestion control)
+const CongestionWindowSize = 10 * MaxPayloadSize
+
+// ReceiveLimitUpdateInterval is the interval (in milliseconds) between window updates.
+const ReceiveLimitUpdateInterval = 100

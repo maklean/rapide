@@ -9,7 +9,7 @@ import (
 )
 
 // PacketHeaderSize is the sum of the size of all struct members (excluding Payload)
-const PacketHeaderSize = 4 + 2 + 2 + 1 + 1 + 1 + 1 + 2
+const PacketHeaderSize = 4 + 2 + 2 + 2 + 2 + 1 + 1 + 1 + 1 + 2
 
 type Packet struct {
 	// peer connection ID
@@ -20,6 +20,12 @@ type Packet struct {
 
 	// sequence number being acknowledged
 	AckSequenceNumber uint16
+
+	// global sequence number between reliable & unreliable sequences
+	GlobalSequenceNumber uint16
+
+	// highest reliable sequence number that can be accepted by the client
+	ReceiveLimit uint16
 
 	// whether this is a handshake packet sent by the client or not
 	IsHandshakeClient bool
@@ -32,6 +38,9 @@ type Packet struct {
 
 	// whether this packet is an acknowledgement packet or not
 	IsAck bool
+
+	// whether this packet is a window update packet or not
+	IsWindowUpdate bool
 
 	// size of data being sent
 	PayloadSize uint16
@@ -57,7 +66,7 @@ func FromBytes(data []byte) (*Packet, error) {
 
 	reader := bytes.NewReader(data)
 
-	for _, field := range []any{&p.ConnectionID, &p.RawSequenceNumber, &p.AckSequenceNumber, &p.IsHandshakeClient, &p.IsHandshakeServer, &p.IsReliable, &p.IsAck, &p.PayloadSize} {
+	for _, field := range []any{&p.ConnectionID, &p.RawSequenceNumber, &p.AckSequenceNumber, &p.GlobalSequenceNumber, &p.ReceiveLimit, &p.IsHandshakeClient, &p.IsHandshakeServer, &p.IsReliable, &p.IsAck, &p.IsWindowUpdate, &p.PayloadSize} {
 		if err := binary.Read(reader, binary.BigEndian, field); err != nil {
 			return nil, err
 		}
@@ -83,7 +92,7 @@ func (p *Packet) ToBytes() ([]byte, error) {
 
 	buf := new(bytes.Buffer)
 
-	for _, field := range []any{p.ConnectionID, p.RawSequenceNumber, p.AckSequenceNumber, p.IsHandshakeClient, p.IsHandshakeServer, p.IsReliable, p.IsAck, p.PayloadSize} {
+	for _, field := range []any{p.ConnectionID, p.RawSequenceNumber, p.AckSequenceNumber, p.GlobalSequenceNumber, p.ReceiveLimit, p.IsHandshakeClient, p.IsHandshakeServer, p.IsReliable, p.IsAck, p.IsWindowUpdate, p.PayloadSize} {
 		if err := binary.Write(buf, binary.BigEndian, field); err != nil {
 			return nil, err
 		}
@@ -96,5 +105,10 @@ func (p *Packet) ToBytes() ([]byte, error) {
 
 // Sn returns the Packet's SequenceNumber.
 func (p *Packet) Sn() SequenceNumber {
-	return SequenceNumberInit(p.RawSequenceNumber)
+	return NewSequenceNumber(p.RawSequenceNumber)
+}
+
+// GSn returns the Packet's GlobalSequenceNumber.
+func (p *Packet) GSn() SequenceNumber {
+	return NewSequenceNumber(p.GlobalSequenceNumber)
 }
