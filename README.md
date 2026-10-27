@@ -16,3 +16,4 @@ a (WIP) toy reliable UDP network protocol written in Go
     - `Connection.RemoteAddr()`
     - `Connection.Close()`
 - TCP's retransmission timer ([RFC 6298](https://www.rfc-editor.org/info/rfc6298/))
+- Flow Control ([explained here](https://github.com/maklean/rapide/pull/3#issue-6051682521))
