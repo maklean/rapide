@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"math/rand"
 	"time"
 
 	"github.com/maklean/rapide"
@@ -23,7 +24,13 @@ func main() {
 	i := 0
 
 	for {
-		err = conn.Send(fmt.Appendf(nil, "Hello Server %d!", i), false)
+		reliable := rand.Intn(2) == 1
+		rStr := "[unreliable]"
+		if reliable {
+			rStr = "[reliable]"
+		}
+
+		err = conn.Send(fmt.Appendf(nil, "%s Hello Server %d!", rStr, i), reliable)
 		if err != nil {
 			continue
 		}
