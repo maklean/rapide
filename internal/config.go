@@ -26,10 +26,13 @@ const ConnectionReceiveWindowSize = 128
 const ConnectionTickInterval = 100
 
 // MaxRetransmissionRetries is the maximum number of times we retransmit a packet before assuming the connection is dead
-const MaxRetransmissionRetries = 3
+const MaxRetransmissionRetries = 10
 
 // MaxRetransmissionTimeout is the maximum retransmission timeout (in milliseconds)
 const MaxRetransmissionTimeout = 60000
 
 // CongestionWindowSize (cwnd) is a placeholder constant for the congestion window (until I properly implement congestion control)
 const CongestionWindowSize = 10 * MaxPayloadSize
+
+// ReceiveLimitUpdateInterval is the interval (in milliseconds) between window updates.
+const ReceiveLimitUpdateInterval = 3000

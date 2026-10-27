@@ -23,9 +23,9 @@ func main() {
 	i := 0
 
 	for {
-		err = conn.Send(fmt.Appendf(nil, "Hello Server %d!", i), true)
+		err = conn.Send(fmt.Appendf(nil, "Hello Server %d!", i), false)
 		if err != nil {
-			log.Fatal(err)
+			continue
 		}
 
 		i++
