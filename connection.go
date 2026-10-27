@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"log"
 	"net"
 	"sync"
 	"time"
@@ -254,13 +253,7 @@ func (c *connection) handleIncomingReliable(p *internal.Packet) {
 		return
 	}
 
-	if dist >= int16(cap(c.relReceive)) {
-		log.Fatalln("sender somehow violated the receive limit")
-		return
-	}
-
-	if dist == 0 && c.relFree() == 0 {
-		log.Fatalln("there's somehow no more space in the receive queue")
+	if dist >= int16(cap(c.relReceive)) || (dist == 0 && c.relFree() == 0) {
 		return
 	}
 
