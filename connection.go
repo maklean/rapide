@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"log"
 	"net"
 	"sync"
 	"time"
@@ -49,8 +50,11 @@ type connection struct {
 	// incoming unreliable packets
 	unrelIncoming chan *internal.Packet
 
-	// incoming packets (for user API / Connection.Read())
-	receiveQueue *internal.ReceiveQueue
+	// reliable receive queue
+	relReceive chan []byte
+
+	// unreliable receive queue
+	unrelReceive chan []byte
 
 	// outgoing reliable payloads
 	relOutgoing chan []byte
@@ -115,12 +119,21 @@ func (c *connection) Read(buf []byte) (int, error) {
 		return 0, fmt.Errorf("%w: %v", internal.ErrClientConnectionClosed, context.Cause(c.ctx))
 	}
 
-	data, err := c.receiveQueue.Pop(c.ctx)
-	if err != nil {
-		return 0, fmt.Errorf("%w: %v", internal.ErrClientConnectionClosed, context.Cause(c.ctx))
+	// prefer reliable first
+	select {
+	case data := <-c.relReceive:
+		return copy(buf, data), nil
+	default:
 	}
 
-	return copy(buf, data), nil
+	select {
+	case data := <-c.relReceive:
+		return copy(buf, data), nil
+	case data := <-c.unrelReceive:
+		return copy(buf, data), nil
+	case <-c.ctx.Done():
+		return 0, fmt.Errorf("%w: %v", internal.ErrClientConnectionClosed, context.Cause(c.ctx))
+	}
 }
 
 // LocalAddr returns the local address this connection is bound to.
@@ -162,7 +175,8 @@ func newConnection(parent context.Context, connectionID uint32, udpConn internal
 		pending:             make(map[uint16]*internal.Packet),
 		relIncoming:         make(chan *internal.Packet, internal.ConnectionIncomingBacklog),
 		unrelIncoming:       make(chan *internal.Packet, internal.ConnectionIncomingBacklog),
-		receiveQueue:        internal.NewReceiveQueue(internal.ConnectionReceiveWindowSize), // TODO: find proper initialization value for receive buffer/queue
+		relReceive:          make(chan []byte, internal.ConnectionReceiveWindowSize),
+		unrelReceive:        make(chan []byte, internal.ConnectionReceiveWindowSize),
 		relOutgoing:         make(chan []byte, internal.ConnectionOutgoingBacklog),
 		unrelOutgoing:       make(chan []byte, internal.ConnectionOutgoingBacklog),
 		retransmissionTimer: internal.NewRetransmissionTimer(),
@@ -240,12 +254,13 @@ func (c *connection) handleIncomingReliable(p *internal.Packet) {
 		return
 	}
 
-	if dist >= int16(c.receiveQueue.Capacity()) {
+	if dist >= int16(cap(c.relReceive)) {
+		log.Fatalln("sender somehow violated the receive limit")
 		return
 	}
 
-	if dist == 0 && c.receiveQueue.Free() == 0 {
-		// no more space in the receive queue
+	if dist == 0 && c.relFree() == 0 {
+		log.Fatalln("there's somehow no more space in the receive queue")
 		return
 	}
 
@@ -260,12 +275,15 @@ func (c *connection) handleIncomingReliable(p *internal.Packet) {
 			break
 		}
 
-		if !c.receiveQueue.Push(p.Payload) {
-			break
+		select {
+		case c.relReceive <- p.Payload:
+			delete(c.pending, c.reliableSeq.NextIn.Value)
+			c.reliableSeq.NextIn = c.reliableSeq.NextIn.Next()
+		case <-c.ctx.Done():
+			return
+		default:
+			return
 		}
-
-		delete(c.pending, c.reliableSeq.NextIn.Value)
-		c.reliableSeq.NextIn = c.reliableSeq.NextIn.Next()
 	}
 }
 
@@ -279,16 +297,12 @@ func (c *connection) handleIncomingUnreliable(p *internal.Packet) {
 		return
 	}
 
-	if 3*c.receiveQueue.Free() <= c.receiveQueue.Capacity() {
-		// if the free space available is at most 1/3 of the capacity, drop
-		return
+	select {
+	case c.unrelReceive <- p.Payload:
+		c.unreliableSeq.NextIn = sn.Next()
+	case <-c.ctx.Done():
+	default:
 	}
-
-	if !c.receiveQueue.Push(p.Payload) {
-		return
-	}
-
-	c.unreliableSeq.NextIn = sn.Next()
 }
 
 // updateReceiveLimit updates the connection's receive limit based on the packet its peer sent.
@@ -389,12 +403,15 @@ func (c *connection) drainPending() {
 			break
 		}
 
-		if !c.receiveQueue.Push(p.Payload) {
-			break
+		select {
+		case c.relReceive <- p.Payload:
+			delete(c.pending, c.reliableSeq.NextIn.Value)
+			c.reliableSeq.NextIn = c.reliableSeq.NextIn.Next()
+		case <-c.ctx.Done():
+			return
+		default:
+			return
 		}
-
-		delete(c.pending, c.reliableSeq.NextIn.Value)
-		c.reliableSeq.NextIn = c.reliableSeq.NextIn.Next()
 	}
 }
 
@@ -464,7 +481,12 @@ func (c *connection) deliver(p *internal.Packet) error {
 
 // receiveLimit calculates this connection's ReceiveLimit.
 func (c *connection) receiveLimit() uint16 {
-	return c.reliableSeq.NextIn.Value + uint16(c.receiveQueue.Free())
+	return c.reliableSeq.NextIn.Value + uint16(c.relFree())
+}
+
+// relFree returns the free space on the relReceive channel.
+func (c *connection) relFree() int {
+	return cap(c.relReceive) - len(c.relReceive)
 }
 
 // close closes the connection with the given error/reason.

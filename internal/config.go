@@ -35,4 +35,4 @@ const MaxRetransmissionTimeout = 60000
 const CongestionWindowSize = 10 * MaxPayloadSize
 
 // ReceiveLimitUpdateInterval is the interval (in milliseconds) between window updates.
-const ReceiveLimitUpdateInterval = 3000
+const ReceiveLimitUpdateInterval = 100
