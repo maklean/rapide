@@ -18,8 +18,8 @@ const ConnectionIncomingBacklog = 256
 // ConnectionOutgoingBacklog is the capacity of the connection's backlog channels/queues
 const ConnectionOutgoingBacklog = 256
 
-// ConnectionReceiveWindowSize is the maximum size of the connection's receive window.
-const ConnectionReceiveWindowSize = 128
+// ConnectionReceiveQueueSize is the capacity of the connection's reliable & unreliable receive queues.
+const ConnectionReceiveQueueSize = 128
 
 // ConnectionTickInterval is the amount of time (in milliseconds) between each connection tick.
 // NOTE: 100ms is a recommended clock granularity for the retransmission timer (see RFC 6298 section 4)
@@ -31,8 +31,5 @@ const MaxRetransmissionRetries = 10
 // MaxRetransmissionTimeout is the maximum retransmission timeout (in milliseconds)
 const MaxRetransmissionTimeout = 60000
 
-// CongestionWindowSize (cwnd) is a placeholder constant for the congestion window (until I properly implement congestion control)
-const CongestionWindowSize = 10 * MaxPayloadSize
-
-// ReceiveLimitUpdateInterval is the interval (in milliseconds) between window updates.
+// ReceiveLimitUpdateInterval is the interval (in milliseconds) between receive limit window updates.
 const ReceiveLimitUpdateInterval = 100
