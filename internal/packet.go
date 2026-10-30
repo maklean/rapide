@@ -11,6 +11,7 @@ import (
 // PacketHeaderSize is the sum of the size of all struct members (excluding Payload)
 const PacketHeaderSize = 4 + 2 + 2 + 2 + 2 + 1 + 1 + 1 + 1 + 2
 
+// NOTE: this packet header is insanely wasteful with memory atm.
 type Packet struct {
 	// peer connection ID
 	ConnectionID uint32
@@ -42,6 +43,9 @@ type Packet struct {
 	// whether this packet is a window update packet or not
 	IsWindowUpdate bool
 
+	// whether this is a close frame packet or not
+	IsCloseFrame bool
+
 	// size of data being sent
 	PayloadSize uint16
 
@@ -66,7 +70,7 @@ func FromBytes(data []byte) (*Packet, error) {
 
 	reader := bytes.NewReader(data)
 
-	for _, field := range []any{&p.ConnectionID, &p.RawSequenceNumber, &p.AckSequenceNumber, &p.GlobalSequenceNumber, &p.ReceiveLimit, &p.IsHandshakeClient, &p.IsHandshakeServer, &p.IsReliable, &p.IsAck, &p.IsWindowUpdate, &p.PayloadSize} {
+	for _, field := range []any{&p.ConnectionID, &p.RawSequenceNumber, &p.AckSequenceNumber, &p.GlobalSequenceNumber, &p.ReceiveLimit, &p.IsHandshakeClient, &p.IsHandshakeServer, &p.IsReliable, &p.IsAck, &p.IsWindowUpdate, &p.IsCloseFrame, &p.PayloadSize} {
 		if err := binary.Read(reader, binary.BigEndian, field); err != nil {
 			return nil, err
 		}
@@ -92,7 +96,7 @@ func (p *Packet) ToBytes() ([]byte, error) {
 
 	buf := new(bytes.Buffer)
 
-	for _, field := range []any{p.ConnectionID, p.RawSequenceNumber, p.AckSequenceNumber, p.GlobalSequenceNumber, p.ReceiveLimit, p.IsHandshakeClient, p.IsHandshakeServer, p.IsReliable, p.IsAck, p.IsWindowUpdate, p.PayloadSize} {
+	for _, field := range []any{p.ConnectionID, p.RawSequenceNumber, p.AckSequenceNumber, p.GlobalSequenceNumber, p.ReceiveLimit, p.IsHandshakeClient, p.IsHandshakeServer, p.IsReliable, p.IsAck, p.IsWindowUpdate, p.IsCloseFrame, p.PayloadSize} {
 		if err := binary.Write(buf, binary.BigEndian, field); err != nil {
 			return nil, err
 		}

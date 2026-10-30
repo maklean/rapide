@@ -151,6 +151,8 @@ func (c *connection) Close() error {
 		return fmt.Errorf("%w: %v", internal.ErrClientConnectionClosed, context.Cause(c.ctx))
 	}
 
+	c.sendCloseFrame()
+
 	c.close(internal.ErrCloseRequest)
 	return nil
 }
@@ -240,6 +242,9 @@ func (c *connection) handleIncomingReliable(p *internal.Packet) {
 		delete(c.unacked, p.AckSequenceNumber)
 		return
 	} else if p.IsWindowUpdate {
+		return
+	} else if p.IsCloseFrame {
+		c.close(internal.ErrCloseRequest)
 		return
 	}
 
@@ -455,10 +460,24 @@ func (c *connection) sendAck(ackSn internal.SequenceNumber) {
 	}
 }
 
+// sendCloseFrame sends a close frame packet to the peer.
+func (c *connection) sendCloseFrame() {
+	close, err := (&internal.Packet{
+		ConnectionID: c.connectionID,
+		IsCloseFrame: true,
+	}).ToBytes()
+
+	if err != nil {
+		return
+	}
+
+	c.udpConnection.Write(close)
+}
+
 // deliver adds the given packet to the correct incoming channel.
 func (c *connection) deliver(p *internal.Packet) error {
 	ch := c.unrelIncoming
-	if p.IsReliable || p.IsAck || p.IsWindowUpdate {
+	if p.IsReliable || p.IsAck || p.IsWindowUpdate || p.IsCloseFrame {
 		ch = c.relIncoming
 	}
 

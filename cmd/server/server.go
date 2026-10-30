@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"log"
+	"time"
 
 	"github.com/maklean/rapide"
 )
@@ -17,21 +18,18 @@ func main() {
 
 	log.Printf("Started listening at %s...", listener.Addr().String())
 
-	client, err := listener.Accept(context.Background())
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	log.Printf("Accepted client: %s", client.RemoteAddr().String())
-
-	buf := make([]byte, 1024)
-
-	for {
-		n, err := client.Read(buf)
+	for range 2 {
+		client, err := listener.Accept(context.Background())
 		if err != nil {
 			log.Fatal(err)
 		}
 
-		log.Printf("Received data from client: %s", string(buf[:n]))
+		log.Printf("Accepted client: %s", client.RemoteAddr().String())
 	}
+
+	time.Sleep(2 * time.Second)
+
+	listener.Close()
+
+	select {}
 }

@@ -2,9 +2,7 @@ package main
 
 import (
 	"context"
-	"fmt"
 	"log"
-	"math/rand"
 	"time"
 
 	"github.com/maklean/rapide"
@@ -21,22 +19,5 @@ func main() {
 
 	log.Printf("got connection '%s', connected to '%s'...", conn.LocalAddr().String(), conn.RemoteAddr().String())
 
-	i := 0
-
-	for {
-		reliable := rand.Intn(2) == 1
-		rStr := "[unreliable]"
-		if reliable {
-			rStr = "[reliable]"
-		}
-
-		err = conn.Send(fmt.Appendf(nil, "%s Hello Server %d!", rStr, i), reliable)
-		if err != nil {
-			continue
-		}
-
-		i++
-
-		log.Println("Sent message to server")
-	}
+	select {}
 }

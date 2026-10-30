@@ -68,8 +68,6 @@ func (l *Listener) Addr() net.Addr {
 // close closes the listener with the given error/reason.
 func (l *Listener) close(err error) {
 	l.cancelOnce.Do(func() {
-		l.cancel(err)
-
 		l.peersMu.Lock()
 		peers := maps.Clone(l.peers)
 		l.peersMu.Unlock()
@@ -78,6 +76,7 @@ func (l *Listener) close(err error) {
 			peer.Close()
 		}
 
+		l.cancel(err)
 		l.conn.Close()
 	})
 }
